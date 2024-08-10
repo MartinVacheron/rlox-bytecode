@@ -155,7 +155,7 @@ fn make_rules<'src>() -> Rules<'src> {
         Rule::new(None, Some(Compiler::binary), P::Comparison),            // Less
         Rule::new(None, Some(Compiler::binary), P::Comparison),            // LessEqual
         Rule::new(None, None, P::None),                                    // Identifier
-        Rule::new(None, None, P::None),                                    // String
+        Rule::new(Some(Compiler::string), None, P::None),                  // String
         Rule::new(Some(Compiler::number), None, P::None),                  // Int
         Rule::new(Some(Compiler::number), None, P::None),                  // Float
         Rule::new(None, None, P::None),                                    // Struct
@@ -292,6 +292,12 @@ impl<'src> Compiler<'src> {
             .expect("Error parsing float");
 
         self.emit_constant(Value::Float(val));
+    }
+
+    fn string(&mut self) {
+        let str_len = self.parser.previous.lexeme.len();
+        let final_str = self.parser.previous.lexeme[1..str_len-1].to_string();
+        self.emit_constant(Value::Str(Box::new(final_str)));
     }
 
     fn literal(&mut self) {

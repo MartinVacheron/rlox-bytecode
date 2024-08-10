@@ -79,7 +79,19 @@ impl Vm {
 
                     self.push(val);
                 }
-                Op::Add => self.binop(|a, b| a + b),
+                Op::Add => {
+                    let (rhs, lhs) = (self.pop(), self.pop());
+
+                    match (lhs, rhs) {
+                        (Value::Float(v1), Value::Float(v2)) => {
+                            self.push(Value::Float(v1 + v2))
+                        }
+                        (Value::Str(v1), Value::Str(v2)) => {
+                            self.push(Value::Str(Box::new(String::from(*v1 + &*v2))))
+                        }
+                        _ => self.runtime_err("Operands must be numbers"),
+                    }
+                },
                 Op::Subtract => self.binop(|a, b| a - b),
                 Op::Multiply => self.binop(|a, b| a * b),
                 Op::Divide => self.binop(|a, b| a / b),
@@ -98,8 +110,7 @@ impl Vm {
                     self.push(val);
                 }
                 Op::Equal => {
-                    let v1 = self.pop();
-                    let v2 = self.pop();
+                    let (v1, v2) = (self.pop(), self.pop());
 
                     self.push(Value::Bool(v1 == v2));
                 }
