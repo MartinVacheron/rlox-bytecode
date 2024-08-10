@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "crates/*",
+]
+
+[workspace.dependencies]
+rizon-frontend = { path = "crates/rizon-frontend" }
+thiserror = "1.0"
