@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use thiserror::Error;
 
 use crate::chunk::{Chunk, Op};
@@ -5,6 +7,8 @@ use crate::compiler::Compiler;
 use crate::debug::disassemble_instruction;
 use crate::value::Value;
 
+
+#[derive(Default)]
 pub struct VmFlags {
     pub disassemble_compiled: bool,
     pub disassemble_instructions: bool,
@@ -21,20 +25,20 @@ pub enum VmErr {
 
 pub type VmRes = Result<Value, VmErr>;
 
+#[derive(Default)]
 pub struct Vm {
     chunk: Chunk,
     ip: usize,
     stack: Vec<Value>,
     flags: VmFlags,
+    globals: HashMap<String, Value>,
 }
 
 impl Vm {
     pub fn new(flags: VmFlags) -> Self {
         Self {
-            chunk: Chunk::default(),
-            ip: 0,
-            stack: vec![],
             flags,
+            ..Default::default()
         }
     }
 
@@ -59,11 +63,7 @@ impl Vm {
             let tk = self.eat().clone();
 
             match tk {
-                Op::Return => {
-                    let val = self.pop();
-                    println!("{}", val);
-                    return Ok(val);
-                }
+                Op::Return => return Ok(Value::Float(0.)),
                 Op::Constant(idx) => {
                     let val = self.chunk.constants[idx as usize].clone();
                     self.push(val);
@@ -104,7 +104,7 @@ impl Vm {
                     if let Value::Bool(b) = &mut val {
                         *b = !*b;
                     } else {
-                        self.runtime_err("Can't use 'not' operate on anything else than a bool")
+                        self.runtime_err("Can't use 'not' operator on anything else than a bool")
                     }
 
                     self.push(val);
@@ -116,6 +116,40 @@ impl Vm {
                 }
                 Op::Greater => self.binop_to_bool(|a, b| a > b),
                 Op::Less => self.binop_to_bool(|a, b| a < b),
+                Op::Print => println!("{}", self.pop()),
+                Op::Pop => { self.pop(); },
+                Op::DefineGlobal(id) => match &self.chunk.constants[id as usize] {
+                    Value::Str(s) => {
+                        let name = *s.clone();
+                        let value = self.pop();
+                        self.globals.insert(name, value);
+                    },
+                    _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL")
+                },
+                Op::GetGlobal(id) => match &self.chunk.constants[id as usize] {
+                    Value::Str(s) => {
+                        match self.globals.get(s.as_ref()) {
+                            Some(glob) => self.push(glob.clone()),
+                            None => {
+                                self.runtime_err(&format!("Undefined variable '{}'", s));
+                                return Err(VmErr::Runtime)
+                            }
+                        }
+
+                    },
+                    _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL")
+                },
+                Op::SetGlobal(id) => match &self.chunk.constants[id as usize] {
+                    Value::Str(s) => {
+                        let name = *s.clone();
+                        
+                        if self.globals.insert(name, self.peek(0).clone()).is_none() {
+                            self.runtime_err(&format!("Undefined variable '{}'", s));
+                            return Err(VmErr::Runtime)
+                        }
+                    },
+                    _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL")
+                }
             }
         }
     }

@@ -19,6 +19,11 @@ pub enum Op {
     Equal, // TODO: implement the three others: https://craftinginterpreters.com/types-of-values.html#equality-and-comparison-operators
     Greater,
     Less,
+    Print,
+    Pop,
+    DefineGlobal(u8),
+    GetGlobal(u8),
+    SetGlobal(u8),
 }
 
 #[derive(Default)]
