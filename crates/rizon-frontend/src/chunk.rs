@@ -2,7 +2,7 @@
 use crate::value::Value;
 
 // #[derive(IntoPrimitive, TryFromPrimitive)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[repr(u8)]
 pub enum Op {
     Return,
@@ -24,6 +24,11 @@ pub enum Op {
     DefineGlobal(u8),
     GetGlobal(u8),
     SetGlobal(u8),
+    GetLocal(u8),
+    SetLocal(u8),
+    JumpIfFalse(u16),
+    Jump(u16),
+    Loop(u16),
 }
 
 #[derive(Default)]

@@ -7,6 +7,8 @@ use Precedence as P;
 
 impl<'src> Compiler<'src> {
     pub(super) fn declaration(&mut self) {
+        self.skip_new_lines();
+
         if self.is_at(TokenKind::Var) {
             self.var_declaration();
         } else {
@@ -48,6 +50,18 @@ impl<'src> Compiler<'src> {
             return
         }
 
+        if self.scope.locals.len() > 0 {
+            for i in (0..=self.scope.locals.len() - 1).rev() {
+                if self.scope.locals[i].depth < self.scope.depth {
+                    break
+                }
+    
+                if self.scope.locals[i].name == self.previous.lexeme {
+                    self.error("already declared variable in this scope");
+                }
+            }
+        }
+
         self.add_local(&self.previous.lexeme);
     }
 
@@ -58,6 +72,7 @@ impl<'src> Compiler<'src> {
 
     fn define_variable(&mut self, id: usize) {
         if self.scope.depth > 0 {
+            self.mark_initialized();
             return
         }
 
@@ -67,11 +82,16 @@ impl<'src> Compiler<'src> {
     fn statement(&mut self) {
         if self.is_at(TokenKind::Print) {
             self.print_statement();
-        } else if self.is_at(TokenKind::LeftBrace) {
+        } else if self.is_at_and_skip(TokenKind::LeftBrace) {
             self.begin_scope();
             self.block();
             self.end_scope();
-        } else {
+        } else if self.is_at(TokenKind::If) {
+            self.if_statement();
+        } else if self.is_at(TokenKind::While) {
+            self.while_statement();
+        }
+        else {
             self.expression_statement();
         }
     }
@@ -84,9 +104,75 @@ impl<'src> Compiler<'src> {
     fn block(&mut self) {
         while !self.check(TokenKind::RightBrace) && !self.eof() {
             self.declaration();
+            self.skip_new_lines();
         }
 
         self.expect(TokenKind::RightBrace, "expect '}' after block");
+    }
+
+    fn if_statement(&mut self) {
+        self.expression();
+        self.expect_and_skip(TokenKind::LeftBrace, "expect '{' before 'if' body");
+
+        let then_jump = self.emit_jump(Op::JumpIfFalse(0xffff));
+        // Will pop the condition if the branch is true
+        self.emit_byte(Op::Pop);
+        self.statement();
+
+        self.skip_new_lines();
+        self.expect_and_skip(TokenKind::RightBrace, "expect '}' after 'if' body");
+
+        let else_jump = self.emit_jump(Op::Jump(0xffff));
+        
+        // Will pop the condition if the branch is false
+        self.emit_byte(Op::Pop);
+
+        self.patch_jump(then_jump);
+
+        if self.is_at_and_skip(TokenKind::Else) {
+            self.expect_and_skip(TokenKind::LeftBrace, "expect '{' before 'then' body");
+            self.statement();
+            self.skip_new_lines();
+            self.expect_and_skip(TokenKind::RightBrace, "expect '}' after 'else' body");
+        }
+
+        self.patch_jump(else_jump);
+    }
+
+    fn while_statement(&mut self) {
+        let loop_start = self.chunk.code.len() - 1;
+
+        self.expression();
+        self.expect_and_skip(TokenKind::LeftBrace, "expect '{' before 'while' body");
+
+        let exit_jump = self.emit_jump(Op::JumpIfFalse(0xffff));
+        self.emit_byte(Op::Pop);
+
+        self.statement();
+        self.emit_loop(loop_start);
+
+        self.patch_jump(exit_jump);
+        self.emit_byte(Op::Pop);
+    }
+
+    pub(super) fn and(&mut self, _: bool) {
+        let end_jump = self.emit_jump(Op::JumpIfFalse(0xffff));
+        self.emit_byte(Op::Pop);
+
+        self.parse_precedence(Precedence::And);
+        self.patch_jump(end_jump);
+    }
+
+    // TODO: Implement real JUMP_IF_TRUE Op, this is not clear and less efficient
+    pub(super) fn or(&mut self, _: bool) {
+        let else_jump = self.emit_jump(Op::JumpIfFalse(0xffff));
+        let end_jump = self.emit_jump(Op::Jump(0xffff));
+
+        self.patch_jump(else_jump);
+        self.emit_byte(Op::Pop);
+
+        self.parse_precedence(Precedence::Or);
+        self.patch_jump(end_jump);
     }
 
     fn expression_statement(&mut self) {
@@ -107,7 +193,7 @@ impl<'src> Compiler<'src> {
         match prefix_rule {
             Some(f) => f(self, can_assign),
             None => {
-                self.error("Expect expression");
+                self.error("expect expression");
                 return;
             }
         }
@@ -186,14 +272,36 @@ impl<'src> Compiler<'src> {
     }
 
     fn named_variable(&mut self, can_assign: bool) {
-        let id = self.identifier_constant();
+        let id = self.resolve_local();
+
+        let (set_op, get_op) = match id {
+            -1 => {
+                let id = self.identifier_constant();
+                (Op::SetGlobal(id as u8), Op::GetGlobal(id as u8))
+            },
+            _ => (Op::SetLocal(id as u8), Op::GetLocal(id as u8))
+        };
 
         if self.is_at(TokenKind::Equal) && can_assign {
             self.expression();
-            self.emit_byte(Op::SetGlobal(id as u8));
+            self.emit_byte(set_op);
         } else {
-            self.emit_byte(Op::GetGlobal(id as u8));
+            self.emit_byte(get_op);
         }
+    }
+
+    fn resolve_local(&mut self) -> i16 {
+        for (idx, local) in self.scope.locals.iter().enumerate().rev() {
+            if local.name == self.previous.lexeme {
+                if local.depth == -1 {
+                    self.error("can't use local variable in its own initializer");
+                }
+
+                return idx as i16
+            }
+        }
+
+        return -1
     }
 
     pub(super) fn literal(&mut self, _: bool) {
@@ -225,16 +333,53 @@ impl<'src> Compiler<'src> {
         self.emit_byte(Op::Constant(id));
     }
 
+    pub(super) fn emit_byte(&mut self, byte: Op) {
+        self.chunk.write(byte, self.previous.line);
+    }
+
     fn emit_bytes(&mut self, byte1: Op, byte2: Op) {
         self.emit_byte(byte1);
         self.emit_byte(byte2);
     }
 
-    fn emit_byte(&mut self, byte: Op) {
-        self.chunk.write(byte, self.previous.line);
+    fn emit_byte_prev_line(&mut self, byte: Op) {
+        let line = if self.previous.line == 0 { 0 } else { self.previous.line - 1 };
+        self.chunk.write(byte, line);
     }
 
-    fn emit_byte_prev_line(&mut self, byte: Op) {
-        self.chunk.write(byte, self.previous.line - 1);
+    fn emit_jump(&mut self, jump: Op) -> usize {
+        self.emit_byte(jump);
+
+        self.chunk.code.len() - 1
+    }
+
+    fn emit_loop(&mut self, start: usize) {
+        let offset = self.chunk.code.len() - 1 - start;
+
+        let offset = match u16::try_from(offset) {
+            Ok(o) => o,
+            Err(_) => {
+                self.error("loop body is too large");
+                0xffff
+            }
+        };
+
+        self.emit_byte(Op::Loop(offset));
+    }
+
+    fn patch_jump(&mut self, jump_idx: usize) {
+        let offset = self.chunk.code.len() - 1 - jump_idx;
+
+        if offset > 0xffff {
+            self.error("to much code to jump over");
+        }
+        
+        match &mut self.chunk.code[jump_idx] {
+            Op::JumpIfFalse(i)
+            | Op::Jump(i) => *i = offset as u16,
+            other => {
+                unreachable!("Found: {:?}", other)
+            }
+        }
     }
 }

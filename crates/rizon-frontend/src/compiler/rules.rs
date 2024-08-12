@@ -59,8 +59,8 @@ pub(super) fn make_rules<'src>() -> Rules<'src> {
         Rule::new(None, None, P::None),                                    // Return
         Rule::new(None, None, P::None),                                    // If
         Rule::new(None, None, P::None),                                    // Else
-        Rule::new(None, None, P::None),                                    // And
-        Rule::new(None, None, P::None),                                    // Or
+        Rule::new(None, Some(Compiler::and), P::And),                      // And
+        Rule::new(None, Some(Compiler::or), P::Or),                        // Or
         Rule::new(Some(Compiler::literal), None, P::None),                 // Null
         Rule::new(None, None, P::None),                                    // Print
         Rule::new(None, None, P::None),                                    // For

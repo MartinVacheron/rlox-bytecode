@@ -1,7 +1,7 @@
 use crate::chunk::{Chunk, Op};
 
 pub fn disassemble(chunk: &Chunk, name: &str) {
-    println!("== {} ==", name);
+    println!("\t\t== {} ==", name);
 
     for idx in 0..chunk.code.len() {
         disassemble_instruction(chunk, idx);
@@ -19,7 +19,7 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) {
 
     match &chunk.code[offset] {
         Op::Return => println!("OP_RETURN"),
-        Op::Constant(i) => disassemble_constant("OP_CONSTANT", chunk, *i as usize),
+        Op::Constant(i) => constant("OP_CONSTANT", chunk, *i),
         Op::Negate => println!("OP_NEGATE"),
         Op::Add => println!("OP_ADD"),
         Op::Subtract => println!("OP_SUBTRACT"),
@@ -34,12 +34,25 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) {
         Op::Less => println!("OP_LESS"),
         Op::Print => println!("OP_PRINT"),
         Op::Pop => println!("OP_POP"),
-        Op::DefineGlobal(i) => disassemble_constant("OP_DEFINE_GLOBAL", chunk, *i as usize),
-        Op::GetGlobal(i) => disassemble_constant("OP_GET_GLOBAL", chunk, *i as usize),
-        Op::SetGlobal(i) => disassemble_constant("OP_SET_GLOBAL", chunk, *i as usize),
+        Op::DefineGlobal(i) => constant("OP_DEFINE_GLOBAL", chunk, *i),
+        Op::GetGlobal(i) => constant("OP_GET_GLOBAL", chunk, *i),
+        Op::SetGlobal(i) => constant("OP_SET_GLOBAL", chunk, *i),
+        Op::GetLocal(i) => byte_instruction("OP_GET_LOCAL", *i),
+        Op::SetLocal(i) => byte_instruction("OP_SET_LOCAL", *i),
+        Op::JumpIfFalse(i) => jump_instruction("JUMP_IF_FALSE", *i, 1),
+        Op::Jump(i) => jump_instruction("OP_JUMP", *i, 1),
+        Op::Loop(i) => jump_instruction("OP_LOOP", *i, -1),
     }
 }
 
-fn disassemble_constant(name: &str, chunk: &Chunk, idx: usize) {
-    println!("{:16} {} '{}'", name, idx, chunk.constants[idx]);
+fn constant(name: &str, chunk: &Chunk, idx: u8) {
+    println!("{:16} {} '{}'", name, idx, chunk.constants[idx as usize]);
+}
+
+fn byte_instruction(name: &str, slot: u8) {
+    println!("{:16} {}", name, slot);
+}
+
+fn jump_instruction(name: &str, offset: u16, sign: i32) {
+    println!("{:16} -> {}", name, offset as i32 * sign);
 }

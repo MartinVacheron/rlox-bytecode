@@ -7,7 +7,6 @@ use crate::compiler::Compiler;
 use crate::debug::disassemble_instruction;
 use crate::value::Value;
 
-
 #[derive(Default)]
 pub struct VmFlags {
     pub disassemble_compiled: bool,
@@ -60,9 +59,9 @@ impl Vm {
                 disassemble_instruction(&self.chunk, self.ip);
             }
 
-            let tk = self.eat().clone();
+            let op = self.eat().clone();
 
-            match tk {
+            match op {
                 Op::Return => return Ok(Value::Float(0.)),
                 Op::Constant(idx) => {
                     let val = self.chunk.constants[idx as usize].clone();
@@ -83,15 +82,13 @@ impl Vm {
                     let (rhs, lhs) = (self.pop(), self.pop());
 
                     match (lhs, rhs) {
-                        (Value::Float(v1), Value::Float(v2)) => {
-                            self.push(Value::Float(v1 + v2))
-                        }
+                        (Value::Float(v1), Value::Float(v2)) => self.push(Value::Float(v1 + v2)),
                         (Value::Str(v1), Value::Str(v2)) => {
                             self.push(Value::Str(Box::new(String::from(*v1 + &*v2))))
                         }
                         _ => self.runtime_err("Operands must be numbers"),
                     }
-                },
+                }
                 Op::Subtract => self.binop(|a, b| a - b),
                 Op::Multiply => self.binop(|a, b| a * b),
                 Op::Divide => self.binop(|a, b| a / b),
@@ -117,38 +114,55 @@ impl Vm {
                 Op::Greater => self.binop_to_bool(|a, b| a > b),
                 Op::Less => self.binop_to_bool(|a, b| a < b),
                 Op::Print => println!("{}", self.pop()),
-                Op::Pop => { self.pop(); },
-                Op::DefineGlobal(id) => match &self.chunk.constants[id as usize] {
+                Op::Pop => {
+                    self.pop();
+                }
+                Op::DefineGlobal(idx) => match &self.chunk.constants[idx as usize] {
                     Value::Str(s) => {
                         let name = *s.clone();
                         let value = self.pop();
                         self.globals.insert(name, value);
-                    },
-                    _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL")
+                    }
+                    _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL"),
                 },
-                Op::GetGlobal(id) => match &self.chunk.constants[id as usize] {
-                    Value::Str(s) => {
-                        match self.globals.get(s.as_ref()) {
-                            Some(glob) => self.push(glob.clone()),
-                            None => {
-                                self.runtime_err(&format!("Undefined variable '{}'", s));
-                                return Err(VmErr::Runtime)
-                            }
+                Op::GetGlobal(idx) => match &self.chunk.constants[idx as usize] {
+                    Value::Str(s) => match self.globals.get(s.as_ref()) {
+                        Some(glob) => self.push(glob.clone()),
+                        None => {
+                            self.runtime_err(&format!("Undefined variable '{}'", s));
+                            return Err(VmErr::Runtime);
                         }
-
                     },
-                    _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL")
+                    _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL"),
                 },
-                Op::SetGlobal(id) => match &self.chunk.constants[id as usize] {
+                Op::SetGlobal(idx) => match &self.chunk.constants[idx as usize] {
                     Value::Str(s) => {
                         let name = *s.clone();
-                        
+
                         if self.globals.insert(name, self.peek(0).clone()).is_none() {
                             self.runtime_err(&format!("Undefined variable '{}'", s));
-                            return Err(VmErr::Runtime)
+                            return Err(VmErr::Runtime);
                         }
-                    },
-                    _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL")
+                    }
+                    _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL"),
+                },
+                Op::GetLocal(idx) => {
+                    self.push(self.stack[idx as usize].clone());
+                }
+                Op::SetLocal(idx) => {
+                    self.stack[idx as usize] = self.peek(0).clone();
+                },
+                Op::JumpIfFalse(idx) => {
+                    if let Value::Bool(b) = self.peek(0) {
+                        if !b {
+                            self.ip += idx as usize;
+                        }
+                    }
+                },
+                Op::Jump(idx) => self.ip += idx as usize,
+                Op::Loop(idx) => {
+                    dbg!(idx, self.ip);
+                    self.ip -= idx as usize;
                 }
             }
         }
@@ -159,9 +173,7 @@ impl Vm {
         let (rhs, lhs) = (self.pop(), self.pop());
 
         match (lhs, rhs) {
-            (Value::Float(f1), Value::Float(f2)) => {
-                self.push(Value::Float(operation(f1, f2)))
-            }
+            (Value::Float(f1), Value::Float(f2)) => self.push(Value::Float(operation(f1, f2))),
             _ => self.runtime_err("Operands must be numbers"),
         }
     }
@@ -171,9 +183,7 @@ impl Vm {
         let (rhs, lhs) = (self.pop(), self.pop());
 
         match (lhs, rhs) {
-            (Value::Float(f1), Value::Float(f2)) => {
-                self.push(Value::Bool(operation(f1, f2)))
-            }
+            (Value::Float(f1), Value::Float(f2)) => self.push(Value::Bool(operation(f1, f2))),
             _ => self.runtime_err("Operands must be numbers"),
         }
     }

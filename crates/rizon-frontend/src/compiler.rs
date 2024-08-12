@@ -4,12 +4,11 @@ use crate::{
     lexer::{Lexer, Token, TokenKind},
 };
 
-mod rules;
-mod frontend;
 mod backend;
+mod frontend;
+mod rules;
 
-use rules::{Rules, make_rules};
-
+use rules::{make_rules, Rules};
 
 #[derive(PartialEq, PartialOrd)]
 enum Precedence {
@@ -44,23 +43,24 @@ impl Precedence {
     }
 }
 
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Debug, Copy, Clone)]
 struct Local<'src> {
     name: &'src str,
-    depth: usize,
+    depth: i16,
 }
 
+
+const MAX_LOCALS: usize = std::u8::MAX as usize + 1;
+
 struct Scope<'src> {
-    locals: [Local<'src>; 256],
-    local_count: usize,
-    depth: usize,
+    locals: Vec<Local<'src>>,
+    depth: i16,
 }
 
 impl<'src> Default for Scope<'src> {
     fn default() -> Self {
         Self {
-            locals: [Local::default(); 256],
-            local_count: 0,
+            locals: Vec::with_capacity(MAX_LOCALS),
             depth: 0,
         }
     }
@@ -98,7 +98,7 @@ impl<'src> Compiler<'src> {
 
         while !self.is_at(TokenKind::Eof) {
             self.declaration();
-    
+
             self.skip_new_lines();
         }
 
@@ -120,12 +120,29 @@ impl<'src> Compiler<'src> {
 
     fn end_scope(&mut self) {
         self.scope.depth -= 1;
+
+        for idx in (0..self.scope.locals.len()).rev() {
+            if self.scope.locals[idx].depth > self.scope.depth {
+                self.scope.locals.pop();
+
+                self.emit_byte(Op::Pop);
+            } else {
+                break
+            }
+        }
     }
 
     fn add_local(&mut self, name: &'src str) {
-        let local = Local { name, depth: self.scope.depth };
-        self.scope.local_count += 1;
+        let local = Local {
+            name,
+            depth: -1,
+        };
 
-        self.scope.locals[self.scope.local_count] = local;
+        self.scope.locals.push(local);
+    }
+
+    fn mark_initialized(&mut self) {
+        let last_id = self.scope.locals.len() - 1;
+        self.scope.locals[last_id].depth = self.scope.depth;
     }
 }

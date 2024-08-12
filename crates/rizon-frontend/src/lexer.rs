@@ -94,7 +94,7 @@ impl<'src> Lexer<'src> {
             b'(' => self.new_token(LeftParen),
             b')' => self.new_token(RightParen),
             b'{' => self.new_token(LeftBrace),
-            b'}' => self.new_token(RightParen),
+            b'}' => self.new_token(RightBrace),
             b',' => self.new_token(Comma),
             b'.' => self.new_token(Dot),
             b':' => self.new_token(Colon),
@@ -319,7 +319,7 @@ impl<'src> Lexer<'src> {
     }
 
     fn skip_comment(&mut self) {
-        while self.peek() != b'\n' {
+        while self.peek() != b'\n' && !self.eof() {
             self.advance();
         }
     }

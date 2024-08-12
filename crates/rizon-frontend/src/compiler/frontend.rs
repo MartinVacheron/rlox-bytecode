@@ -33,6 +33,12 @@ impl<'src> Compiler<'src> {
         true
     }
 
+    pub(super) fn is_at_and_skip(&mut self, kind: TokenKind) -> bool {
+        let res = self.is_at(kind);
+        self.skip_new_lines();
+        res
+    }
+
     pub(super) fn expect(&mut self, kind: TokenKind, msg: &str) {
         if self.check(kind) {
             self.advance();
@@ -40,6 +46,11 @@ impl<'src> Compiler<'src> {
         }
 
         self.error_at_current(msg);
+    }
+
+    pub(super) fn expect_and_skip(&mut self, kind: TokenKind, msg: &str) {
+        self.expect(kind, msg);
+        self.skip_new_lines();
     }
 
     pub(super) fn expect_or_eof(&mut self, kind: TokenKind, msg: &str) {
