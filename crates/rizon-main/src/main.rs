@@ -22,13 +22,17 @@ struct Cli {
     /// Path to the file to parse
     file: Option<String>,
 
-    #[arg(long)]
+    #[arg(short, long)]
     /// Disassemble each instruction
-    dis_instr: bool,
+    instr: bool,
 
     #[arg(short, long)]
     /// Disassemble compiled code
     dis_code: bool,
+
+    #[arg(short, long)]
+    /// Print stack at each instruction
+    stack: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -36,7 +40,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let vm_flags = VmFlags {
         disassemble_compiled: cli.dis_code,
-        disassemble_instructions: cli.dis_instr,
+        disassemble_instructions: cli.instr,
+        print_stack: cli.stack,
     };
 
     if let Some(f) = cli.file {
@@ -51,7 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn run_file(file_path: String, vm_flags: VmFlags) -> Result<(), Box<dyn Error>> {
     let mut vm = Vm::new(vm_flags);
     let code = fs::read_to_string(file_path)?;
-    vm.interpret(&code);
+    _ = vm.interpret(&code);
 
     Ok(())
 }
@@ -82,6 +87,6 @@ fn repl(vm_flags: VmFlags) -> Result<(), Box<dyn Error>> {
         }
 
         // Execute interpreter
-        vm.interpret(trimmed_input);
+        _ = vm.interpret(trimmed_input);
     }
 }

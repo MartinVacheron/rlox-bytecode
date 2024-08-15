@@ -11,6 +11,7 @@ use crate::value::Value;
 pub struct VmFlags {
     pub disassemble_compiled: bool,
     pub disassemble_instructions: bool,
+    pub print_stack: bool,
 }
 
 #[derive(Error, Debug)]
@@ -52,9 +53,11 @@ impl Vm {
     fn run(&mut self) -> VmRes {
         loop {
             if self.flags.disassemble_instructions {
-                print!("          ");
-                self.stack.iter().for_each(|v| print!("[{}] ", v));
-                println!();
+                if self.flags.print_stack {
+                    print!("          ");
+                    self.stack.iter().for_each(|v| print!("[ {} ] ", v));
+                    println!();
+                }
 
                 disassemble_instruction(&self.chunk, self.ip);
             }
@@ -62,57 +65,31 @@ impl Vm {
             let op = self.eat().clone();
 
             match op {
-                Op::Return => return Ok(Value::Float(0.)),
+                Op::Return => return Ok(Value::Int(0)),
                 Op::Constant(idx) => {
                     let val = self.chunk.constants[idx as usize].clone();
                     self.push(val);
                 }
                 Op::Negate => {
-                    let mut val = self.pop();
-
-                    if let Value::Float(f) = &mut val {
-                        *f *= -1.;
-                    } else {
-                        self.runtime_err("Can't negate anything than a number")
-                    }
-
-                    self.push(val);
-                }
-                Op::Add => {
-                    let (rhs, lhs) = (self.pop(), self.pop());
-
-                    match (lhs, rhs) {
-                        (Value::Float(v1), Value::Float(v2)) => self.push(Value::Float(v1 + v2)),
-                        (Value::Str(v1), Value::Str(v2)) => {
-                            self.push(Value::Str(Box::new(String::from(*v1 + &*v2))))
-                        }
-                        _ => self.runtime_err("Operands must be numbers"),
+                    if let Err(e) = self.peek_mut(0).negate() {
+                        self.runtime_err(&e.to_string())
                     }
                 }
-                Op::Subtract => self.binop(|a, b| a - b),
-                Op::Multiply => self.binop(|a, b| a * b),
-                Op::Divide => self.binop(|a, b| a / b),
+                Op::Add => self.binop(|a, b| a.add(b)),
+                Op::Subtract => self.binop(|a, b| a.sub(b)),
+                Op::Multiply => self.binop(|a, b| a.mul(b)),
+                Op::Divide => self.binop(|a, b| a.div(b)),
                 Op::True => self.push(Value::Bool(true)),
                 Op::False => self.push(Value::Bool(false)),
                 Op::Null => self.push(Value::Null),
                 Op::Not => {
-                    let mut val = self.pop();
-
-                    if let Value::Bool(b) = &mut val {
-                        *b = !*b;
-                    } else {
-                        self.runtime_err("Can't use 'not' operator on anything else than a bool")
+                    if let Err(e) = self.peek_mut(0).not() {
+                        self.runtime_err(&e.to_string())
                     }
-
-                    self.push(val);
                 }
-                Op::Equal => {
-                    let (v1, v2) = (self.pop(), self.pop());
-
-                    self.push(Value::Bool(v1 == v2));
-                }
-                Op::Greater => self.binop_to_bool(|a, b| a > b),
-                Op::Less => self.binop_to_bool(|a, b| a < b),
+                Op::Equal => self.binop(|a, b| a.eq(b)),
+                Op::Greater => self.binop(|a, b| a.gt(b)),
+                Op::Less => self.binop(|a, b| a.lt(b)),
                 Op::Print => println!("{}", self.pop()),
                 Op::Pop => {
                     self.pop();
@@ -160,31 +137,43 @@ impl Vm {
                     }
                 },
                 Op::Jump(idx) => self.ip += idx as usize,
-                Op::Loop(idx) => {
-                    dbg!(idx, self.ip);
-                    self.ip -= idx as usize;
-                }
+                Op::Loop(idx) => self.ip -= idx as usize,
+                Op::CreateIter => {
+                    if let Value::Int(i) = self.pop() {
+                        // The placeholder value (same as local idx)
+                        self.push(Value::Int(0));
+                        self.push(Value::Iter(0..i));
+                    } else {
+                        self.runtime_err("Range must be an integer");
+                        return Err(VmErr::Runtime);
+                    }
+                },
+                Op::ForIter(idx) => {
+                    if let Value::Iter(iter) = self.peek_mut(0) {
+                        match iter.next() {
+                            Some(v) => {
+                                if let Value::Int(i) = self.peek_mut(1) {
+                                    *i = v;
+                                }
+                            },
+                            None => {
+                                self.pop();
+                                self.ip += idx as usize
+                            },
+                        }
+                    }
+                },
             }
         }
     }
 
-    fn binop(&mut self, operation: fn(f64, f64) -> f64) {
+    fn binop(&mut self, operation: fn(Value, Value) -> Option<Value>) {
         // Pop backward as it is a stack
         let (rhs, lhs) = (self.pop(), self.pop());
 
-        match (lhs, rhs) {
-            (Value::Float(f1), Value::Float(f2)) => self.push(Value::Float(operation(f1, f2))),
-            _ => self.runtime_err("Operands must be numbers"),
-        }
-    }
-
-    fn binop_to_bool(&mut self, operation: fn(f64, f64) -> bool) {
-        // Pop backward as it is a stack
-        let (rhs, lhs) = (self.pop(), self.pop());
-
-        match (lhs, rhs) {
-            (Value::Float(f1), Value::Float(f2)) => self.push(Value::Bool(operation(f1, f2))),
-            _ => self.runtime_err("Operands must be numbers"),
+        match operation(lhs, rhs) {
+            Some(res) => self.push(res),
+            None => self.runtime_err("Operation not allowed")
         }
     }
 
@@ -205,6 +194,11 @@ impl Vm {
 
     fn peek(&self, distance: usize) -> &Value {
         &self.stack[self.stack.len() - distance - 1]
+    }
+
+    fn peek_mut(&mut self, distance: usize) -> &mut Value {
+        let idx = self.stack.len() - distance - 1;
+        &mut self.stack[idx]
     }
 
     fn runtime_err(&self, msg: &str) {

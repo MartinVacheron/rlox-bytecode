@@ -29,6 +29,8 @@ pub enum Op {
     JumpIfFalse(u16),
     Jump(u16),
     Loop(u16),
+    CreateIter,
+    ForIter(u16),
 }
 
 #[derive(Default)]

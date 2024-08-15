@@ -90,10 +90,13 @@ impl<'src> Compiler<'src> {
             self.if_statement();
         } else if self.is_at(TokenKind::While) {
             self.while_statement();
-        }
-        else {
+        } else if self.is_at(TokenKind::For) {
+            self.for_statement();
+        } else {
             self.expression_statement();
         }
+
+        self.skip_new_lines();
     }
 
     fn print_statement(&mut self) {
@@ -107,7 +110,7 @@ impl<'src> Compiler<'src> {
             self.skip_new_lines();
         }
 
-        self.expect(TokenKind::RightBrace, "expect '}' after block");
+        self.expect_and_skip(TokenKind::RightBrace, "expect '}' after block");
     }
 
     fn if_statement(&mut self) {
@@ -119,20 +122,17 @@ impl<'src> Compiler<'src> {
         self.emit_byte(Op::Pop);
         self.statement();
 
-        self.skip_new_lines();
         self.expect_and_skip(TokenKind::RightBrace, "expect '}' after 'if' body");
 
         let else_jump = self.emit_jump(Op::Jump(0xffff));
         
+        self.patch_jump(then_jump);
         // Will pop the condition if the branch is false
         self.emit_byte(Op::Pop);
-
-        self.patch_jump(then_jump);
 
         if self.is_at_and_skip(TokenKind::Else) {
             self.expect_and_skip(TokenKind::LeftBrace, "expect '{' before 'then' body");
             self.statement();
-            self.skip_new_lines();
             self.expect_and_skip(TokenKind::RightBrace, "expect '}' after 'else' body");
         }
 
@@ -143,7 +143,11 @@ impl<'src> Compiler<'src> {
         let loop_start = self.chunk.code.len() - 1;
 
         self.expression();
-        self.expect_and_skip(TokenKind::LeftBrace, "expect '{' before 'while' body");
+
+        if !self.check(TokenKind::LeftBrace) {
+            self.error("expect '{' before 'while' body");
+            return
+        }
 
         let exit_jump = self.emit_jump(Op::JumpIfFalse(0xffff));
         self.emit_byte(Op::Pop);
@@ -153,6 +157,27 @@ impl<'src> Compiler<'src> {
 
         self.patch_jump(exit_jump);
         self.emit_byte(Op::Pop);
+    }
+
+    fn for_statement(&mut self) {
+        self.begin_scope();
+        // Placeholder var
+        self.parse_variable("expected placeholder variable");
+        self.mark_initialized();
+        self.expect(TokenKind::In, "expected 'in' keyword after variable");
+        
+        self.expect(TokenKind::Int, "expected 'int' value to iterate on");
+        self.int(false);
+        self.emit_byte(Op::CreateIter); // Create Value::Iter en popant la valeur de number avant
+
+        let loop_start = self.chunk.code.len() - 1;
+        let exit_jump = self.emit_jump(Op::ForIter(0xffff));  // Prend la 1ere locale (placeholder) et assign la valeur de iter.next()
+
+        self.statement();
+        self.emit_loop(loop_start);
+
+        self.patch_jump(exit_jump);
+        self.end_scope();
     }
 
     pub(super) fn and(&mut self, _: bool) {
@@ -251,7 +276,7 @@ impl<'src> Compiler<'src> {
         }
     }
 
-    pub(super) fn number(&mut self, _: bool) {
+    pub(super) fn float(&mut self, _: bool) {
         let val = self
             .previous
             .lexeme
@@ -259,6 +284,16 @@ impl<'src> Compiler<'src> {
             .expect("Error parsing float");
 
         self.emit_constant(Value::Float(val));
+    }
+
+    pub(super) fn int(&mut self, _: bool) {
+        let val = self
+            .previous
+            .lexeme
+            .parse::<i64>()
+            .expect("Error parsing int");
+
+        self.emit_constant(Value::Int(val));
     }
 
     pub(super) fn string(&mut self, _: bool) {
@@ -354,7 +389,9 @@ impl<'src> Compiler<'src> {
     }
 
     fn emit_loop(&mut self, start: usize) {
-        let offset = self.chunk.code.len() - 1 - start;
+        // No -1 because we want to jump one more backward to jump over
+        // Op::Loop (inverse of Jump)
+        let offset = self.chunk.code.len() - start;
 
         let offset = match u16::try_from(offset) {
             Ok(o) => o,
@@ -368,7 +405,10 @@ impl<'src> Compiler<'src> {
     }
 
     fn patch_jump(&mut self, jump_idx: usize) {
-        let offset = self.chunk.code.len() - 1 - jump_idx;
+        // This is the strict offset but as we are going to pop
+        // the Op::Jump when erading it, we will land on the 
+        // following instruction so it's ok
+        let offset = self.chunk.code.len() -1 - jump_idx;
 
         if offset > 0xffff {
             self.error("to much code to jump over");
@@ -376,7 +416,8 @@ impl<'src> Compiler<'src> {
         
         match &mut self.chunk.code[jump_idx] {
             Op::JumpIfFalse(i)
-            | Op::Jump(i) => *i = offset as u16,
+            | Op::Jump(i)
+            | Op::ForIter(i) => *i = offset as u16,
             other => {
                 unreachable!("Found: {:?}", other)
             }

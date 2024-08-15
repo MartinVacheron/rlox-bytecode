@@ -50,8 +50,8 @@ pub(super) fn make_rules<'src>() -> Rules<'src> {
         Rule::new(None, Some(Compiler::binary), P::Comparison),            // LessEqual
         Rule::new(Some(Compiler::variable), None, P::None),                // Identifier
         Rule::new(Some(Compiler::string), None, P::None),                  // String
-        Rule::new(Some(Compiler::number), None, P::None),                  // Int
-        Rule::new(Some(Compiler::number), None, P::None),                  // Float
+        Rule::new(Some(Compiler::int), None, P::None),                     // Int
+        Rule::new(Some(Compiler::float), None, P::None),                   // Float
         Rule::new(None, None, P::None),                                    // Struct
         Rule::new(None, None, P::None),                                    // Fn
         Rule::new(None, None, P::None),                                    // SelfKw
