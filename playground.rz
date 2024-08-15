@@ -1,36 +1,42 @@
-for i in 5 {
-    print i
-}
+// for i in 5 {
+//     print i
+// }
 
 
-var breakfast = "beignets"
-var beverage = "cafe au lait"
-breakfast = "beignets with " + beverage
-print breakfast
+// var breakfast = "beignets"
+// var beverage = "cafe au lait"
+// breakfast = "beignets with " + beverage
+// print breakfast
 
 
-{
-    var a = 1
-    print a
+// {
+//     var a = 1
+//     print a
 
-    a = 2
-    print a
+//     a = 2
+//     print a
 
-    {
-        print a
-        var a = 56
-        print a
-    }
+//     {
+//         print a
+//         var a = 56
+//         print a
+//     }
 
-    print a
-}
+//     print a
+// }
 
 
-if true {
-    print "it's true!"
-} else {
-    print "it's false"
-}
+// if true {
+//     print "it's true!"
+// } else {
+//     print "it's false"
+// }
+
+// if !true {
+//     print "it's true!"
+// } else {
+//     print "it's false"
+// }
 
 
 var i = 0

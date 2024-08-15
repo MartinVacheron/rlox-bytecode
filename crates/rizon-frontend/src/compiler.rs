@@ -1,7 +1,9 @@
+use anyhow::{bail, Result};
+
 use crate::{
     chunk::{Chunk, Op},
     debug::disassemble,
-    lexer::{Lexer, Token, TokenKind},
+    lexer::{Lexer, Token, TokenKind}, value::{Function, Value},
 };
 
 mod backend;
@@ -66,6 +68,11 @@ impl<'src> Default for Scope<'src> {
     }
 }
 
+enum FnType {
+    Script,
+    Function,
+}
+
 pub struct Compiler<'src> {
     // Frontend
     lexer: Lexer<'src>,
@@ -74,26 +81,31 @@ pub struct Compiler<'src> {
     had_error: bool,
     panic_mode: bool,
     // Backend
-    chunk: &'src mut Chunk,
     rules: Rules<'src>,
+    function: Function,
+    fn_type: FnType,
     scope: Scope<'src>,
 }
 
 impl<'src> Compiler<'src> {
-    pub fn new(code: &'src str, chunk: &'src mut Chunk) -> Self {
+    pub fn new(code: &'src str) -> Self {
+        let mut scope = Scope::default();
+        scope.locals.push(Local { name: "", depth: 0 });
+
         Self {
             lexer: Lexer::new(code),
             current: Token::default(),
             previous: Token::default(),
             had_error: false,
             panic_mode: false,
-            chunk,
             rules: make_rules(),
-            scope: Scope::default(),
+            function: Function::default(),
+            fn_type: FnType::Script,
+            scope,
         }
     }
 
-    pub fn compile(&mut self, debug: bool) -> bool {
+    pub fn compile(&mut self, debug: bool) -> Result<&Function> {
         self.advance();
 
         while !self.is_at(TokenKind::Eof) {
@@ -105,13 +117,32 @@ impl<'src> Compiler<'src> {
         self.expect(TokenKind::Eof, "");
 
         // Tmp
-        self.chunk.write(Op::Return, self.previous.line);
+        let previous_line = self.previous.line;
+        self.chunk_mut().write(Op::Return, previous_line);
 
         if debug {
-            disassemble(&self.chunk, "code");
+            let name = if self.function.name.is_empty() { "<script>" } else { &self.function.name };
+            
+            disassemble(self.chunk(), name);
         }
+        
+        if self.had_error {
+            bail!("Compile error")
+        } else {
+            Ok(&self.function)
+        }
+    }
 
-        return self.had_error;
+    fn chunk(&self) -> &Chunk {
+        &self.function.chunk
+    }
+
+    fn chunk_mut(&mut self) -> &mut Chunk {
+        &mut self.function.chunk
+    }
+
+    fn chunk_last_idx(&mut self) -> usize {
+        self.chunk().code.len() - 1
     }
 
     fn begin_scope(&mut self) {

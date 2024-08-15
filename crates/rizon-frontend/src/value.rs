@@ -3,6 +3,8 @@ use anyhow::{bail, Result};
 
 use Value::*;
 
+use crate::chunk::Chunk;
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Value {
     Int(i64),
@@ -10,7 +12,21 @@ pub enum Value {
     Bool(bool),
     Str(Box<String>),
     Iter(Range<i64>),
+    Fn(Box<Function>),
     Null,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Function {
+    pub arity: usize,
+    pub name: String,
+    pub chunk: Chunk,
+}
+
+impl PartialEq for Function {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
 }
 
 impl Value {
@@ -97,12 +113,19 @@ impl Value {
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Int(v) => write!(f, "{}", v),
-            Value::Float(v) => write!(f, "{}", v),
-            Value::Bool(v) => write!(f, "{}", v),
-            Value::Str(v) => write!(f, "\"{}\"", v),
-            Value::Iter(v) => write!(f, "range {} -> {}", v.start, v.end),
-            Value::Null => write!(f, "null"),
+            Int(v) => write!(f, "{}", v),
+            Float(v) => write!(f, "{}", v),
+            Bool(v) => write!(f, "{}", v),
+            Str(v) => write!(f, "\"{}\"", v),
+            Iter(v) => write!(f, "range {} -> {}", v.start, v.end),
+            Null => write!(f, "null"),
+            Fn(v) => {
+                if !v.name.is_empty() {
+                    write!(f, "<fn {}>", v.name)
+                } else {
+                    write!(f, "<script>")
+                }
+            }
         }
     }
 }

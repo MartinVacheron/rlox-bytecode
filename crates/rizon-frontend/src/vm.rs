@@ -5,7 +5,7 @@ use thiserror::Error;
 use crate::chunk::{Chunk, Op};
 use crate::compiler::Compiler;
 use crate::debug::disassemble_instruction;
-use crate::value::Value;
+use crate::value::{Function, Value};
 
 #[derive(Default)]
 pub struct VmFlags {
@@ -25,11 +25,18 @@ pub enum VmErr {
 
 pub type VmRes = Result<Value, VmErr>;
 
+
+// TODO: Vec with capacity FRAMES_MAX (64) * UINT_8_MAX
+struct CallFrame {
+    function: Function,
+    ip: usize,
+    slots: usize,
+}
+
 #[derive(Default)]
 pub struct Vm {
-    chunk: Chunk,
-    ip: usize,
     stack: Vec<Value>,
+    frames: Vec<CallFrame>,
     flags: VmFlags,
     globals: HashMap<String, Value>,
 }
@@ -43,10 +50,17 @@ impl Vm {
     }
 
     pub fn interpret(&mut self, code: &str) -> VmRes {
-        let mut compiler = Compiler::new(code, &mut self.chunk);
+        let mut compiler = Compiler::new(code);
 
-        compiler.compile(self.flags.disassemble_compiled);
+        let function = match compiler.compile(self.flags.disassemble_compiled) {
+            // FIXME: Clone?
+            Ok(f) => f.clone(),
+            Err(_) => return Err(VmErr::Compile)
+        };
 
+        self.push(Value::Fn(Box::new(function.clone())));
+
+        self.frames.push(CallFrame { function, ip: 0, slots: 0 });
         self.run()
     }
 
@@ -59,7 +73,10 @@ impl Vm {
                     println!();
                 }
 
-                disassemble_instruction(&self.chunk, self.ip);
+                disassemble_instruction(
+                    &self.frame().function.chunk,
+                    self.frame().ip
+                );
             }
 
             let op = self.eat().clone();
@@ -67,7 +84,7 @@ impl Vm {
             match op {
                 Op::Return => return Ok(Value::Int(0)),
                 Op::Constant(idx) => {
-                    let val = self.chunk.constants[idx as usize].clone();
+                    let val = self.frame().function.chunk.constants[idx as usize].clone();
                     self.push(val);
                 }
                 Op::Negate => {
@@ -94,7 +111,7 @@ impl Vm {
                 Op::Pop => {
                     self.pop();
                 }
-                Op::DefineGlobal(idx) => match &self.chunk.constants[idx as usize] {
+                Op::DefineGlobal(idx) => match &self.frame().function.chunk.constants[idx as usize] {
                     Value::Str(s) => {
                         let name = *s.clone();
                         let value = self.pop();
@@ -102,7 +119,7 @@ impl Vm {
                     }
                     _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL"),
                 },
-                Op::GetGlobal(idx) => match &self.chunk.constants[idx as usize] {
+                Op::GetGlobal(idx) => match &self.frame().function.chunk.constants[idx as usize] {
                     Value::Str(s) => match self.globals.get(s.as_ref()) {
                         Some(glob) => self.push(glob.clone()),
                         None => {
@@ -112,32 +129,38 @@ impl Vm {
                     },
                     _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL"),
                 },
-                Op::SetGlobal(idx) => match &self.chunk.constants[idx as usize] {
-                    Value::Str(s) => {
-                        let name = *s.clone();
-
-                        if self.globals.insert(name, self.peek(0).clone()).is_none() {
-                            self.runtime_err(&format!("Undefined variable '{}'", s));
-                            return Err(VmErr::Runtime);
+                Op::SetGlobal(idx) => {
+                    let name = {
+                        match &self.frame().function.chunk.constants[idx as usize] {
+                            Value::Str(s) => *s.clone(),
+                            _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL"),
                         }
+                    };
+
+                    // FIXME: Check before inserting
+                    if self.globals.insert(name.clone(), self.peek(0).clone()).is_none() {
+                        self.runtime_err(&format!("Undefined variable '{}'", name));
+                        return Err(VmErr::Runtime);
                     }
-                    _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL"),
                 },
                 Op::GetLocal(idx) => {
-                    self.push(self.stack[idx as usize].clone());
+                    let offset = self.frame().slots;
+
+                    self.push(self.stack[idx as usize + offset].clone());
                 }
                 Op::SetLocal(idx) => {
-                    self.stack[idx as usize] = self.peek(0).clone();
+                    let offset = self.frame().slots;
+                    self.stack[idx as usize + offset] = self.peek(0).clone();
                 },
                 Op::JumpIfFalse(idx) => {
                     if let Value::Bool(b) = self.peek(0) {
                         if !b {
-                            self.ip += idx as usize;
+                            self.frame_mut().ip += idx as usize;
                         }
                     }
                 },
-                Op::Jump(idx) => self.ip += idx as usize,
-                Op::Loop(idx) => self.ip -= idx as usize,
+                Op::Jump(idx) => self.frame_mut().ip += idx as usize,
+                Op::Loop(idx) => self.frame_mut().ip -= idx as usize,
                 Op::CreateIter => {
                     if let Value::Int(i) = self.pop() {
                         // The placeholder value (same as local idx)
@@ -158,7 +181,7 @@ impl Vm {
                             },
                             None => {
                                 self.pop();
-                                self.ip += idx as usize
+                                self.frame_mut().ip += idx as usize
                             },
                         }
                     }
@@ -178,10 +201,8 @@ impl Vm {
     }
 
     fn eat(&mut self) -> &Op {
-        let op = &self.chunk.code[self.ip];
-        self.ip += 1;
-
-        op
+        self.frame_mut().ip += 1;
+        &self.frame().function.chunk.code[self.frame().ip - 1]
     }
 
     fn pop(&mut self) -> Value {
@@ -190,6 +211,15 @@ impl Vm {
 
     fn push(&mut self, value: Value) {
         self.stack.push(value);
+    }
+
+    // TODO: Use [len() -1] to avoid unwraping for performance
+    fn frame(&self) -> &CallFrame {
+        self.frames.last().unwrap()
+    }
+
+    fn frame_mut(&mut self) -> &mut CallFrame {
+        self.frames.last_mut().unwrap()
     }
 
     fn peek(&self, distance: usize) -> &Value {
@@ -204,7 +234,7 @@ impl Vm {
     fn runtime_err(&self, msg: &str) {
         eprintln!(
             "[line {}] Error: {}",
-            self.chunk.lines[self.chunk.code.len() - 1],
+            self.frame().function.chunk.lines[self.frame().function.chunk.code.len() - 1],
             msg
         );
     }

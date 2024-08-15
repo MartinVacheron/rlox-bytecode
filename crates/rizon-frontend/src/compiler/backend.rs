@@ -140,7 +140,7 @@ impl<'src> Compiler<'src> {
     }
 
     fn while_statement(&mut self) {
-        let loop_start = self.chunk.code.len() - 1;
+        let loop_start = self.chunk_last_idx();
 
         self.expression();
 
@@ -170,7 +170,7 @@ impl<'src> Compiler<'src> {
         self.int(false);
         self.emit_byte(Op::CreateIter); // Create Value::Iter en popant la valeur de number avant
 
-        let loop_start = self.chunk.code.len() - 1;
+        let loop_start = self.chunk_last_idx();
         let exit_jump = self.emit_jump(Op::ForIter(0xffff));  // Prend la 1ere locale (placeholder) et assign la valeur de iter.next()
 
         self.statement();
@@ -349,7 +349,7 @@ impl<'src> Compiler<'src> {
     }
 
     fn make_constant(&mut self, value: Value) -> usize {
-        let id = self.chunk.write_constant(value);
+        let id = self.chunk_mut().write_constant(value);
 
         if id > usize::MAX {
             self.error("Too many constant in one chunk");
@@ -369,7 +369,8 @@ impl<'src> Compiler<'src> {
     }
 
     pub(super) fn emit_byte(&mut self, byte: Op) {
-        self.chunk.write(byte, self.previous.line);
+        let prev_line = self.previous.line;
+        self.chunk_mut().write(byte, prev_line);
     }
 
     fn emit_bytes(&mut self, byte1: Op, byte2: Op) {
@@ -379,19 +380,19 @@ impl<'src> Compiler<'src> {
 
     fn emit_byte_prev_line(&mut self, byte: Op) {
         let line = if self.previous.line == 0 { 0 } else { self.previous.line - 1 };
-        self.chunk.write(byte, line);
+        self.chunk_mut().write(byte, line);
     }
 
     fn emit_jump(&mut self, jump: Op) -> usize {
         self.emit_byte(jump);
 
-        self.chunk.code.len() - 1
+        self.chunk_last_idx()
     }
 
     fn emit_loop(&mut self, start: usize) {
-        // No -1 because we want to jump one more backward to jump over
+        // +1 because we want to jump one more backward to jump over
         // Op::Loop (inverse of Jump)
-        let offset = self.chunk.code.len() - start;
+        let offset = self.chunk_last_idx() + 1 - start;
 
         let offset = match u16::try_from(offset) {
             Ok(o) => o,
@@ -408,13 +409,13 @@ impl<'src> Compiler<'src> {
         // This is the strict offset but as we are going to pop
         // the Op::Jump when erading it, we will land on the 
         // following instruction so it's ok
-        let offset = self.chunk.code.len() -1 - jump_idx;
+        let offset = self.chunk_last_idx() - jump_idx;
 
         if offset > 0xffff {
             self.error("to much code to jump over");
         }
         
-        match &mut self.chunk.code[jump_idx] {
+        match &mut self.chunk_mut().code[jump_idx] {
             Op::JumpIfFalse(i)
             | Op::Jump(i)
             | Op::ForIter(i) => *i = offset as u16,

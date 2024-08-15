@@ -33,7 +33,7 @@ pub enum Op {
     ForIter(u16),
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Debug)]
 pub struct Chunk {
     // code: Vec<u8>
     pub code: Vec<Op>,
