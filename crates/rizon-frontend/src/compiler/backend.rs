@@ -1,16 +1,18 @@
 use crate::{chunk::Op, lexer::TokenKind, value::Value};
 
-use super::{rules::Rule, Compiler, Precedence};
+use super::{rules::Rule, ByteCodeGen, FnType, Precedence};
 
 use Precedence as P;
 
 
-impl<'src> Compiler<'src> {
+impl<'src> ByteCodeGen<'src> {
     pub(super) fn declaration(&mut self) {
         self.skip_new_lines();
 
         if self.is_at(TokenKind::Var) {
             self.var_declaration();
+        } else if self.is_at(TokenKind::Fn) {
+            self.fn_declaration();
         } else {
             self.statement();
         }
@@ -38,7 +40,7 @@ impl<'src> Compiler<'src> {
 
         self.declare_variable();
 
-        if self.scope.depth > 0 {
+        if self.compiler.scope.depth > 0 {
             return 0
         }
 
@@ -46,17 +48,17 @@ impl<'src> Compiler<'src> {
     }
 
     fn declare_variable(&mut self) {
-        if self.scope.depth == 0 {
+        if self.compiler.scope.depth == 0 {
             return
         }
 
-        if self.scope.locals.len() > 0 {
-            for i in (0..=self.scope.locals.len() - 1).rev() {
-                if self.scope.locals[i].depth < self.scope.depth {
+        if self.compiler.scope.locals.len() > 0 {
+            for i in (0..=self.compiler.scope.locals.len() - 1).rev() {
+                if self.compiler.scope.locals[i].depth < self.compiler.scope.depth {
                     break
                 }
     
-                if self.scope.locals[i].name == self.previous.lexeme {
+                if self.compiler.scope.locals[i].name == self.previous.lexeme {
                     self.error("already declared variable in this scope");
                 }
             }
@@ -71,12 +73,53 @@ impl<'src> Compiler<'src> {
     }
 
     fn define_variable(&mut self, id: usize) {
-        if self.scope.depth > 0 {
+        if self.compiler.scope.depth > 0 {
             self.mark_initialized();
             return
         }
 
         self.emit_byte_prev_line(Op::DefineGlobal(id as u8))
+    }
+
+    fn fn_declaration(&mut self) {
+        let idx = self.parse_variable("expected function name");
+        self.mark_initialized();
+        self.function(FnType::Function);
+        self.define_variable(idx);
+    }
+
+    fn function(&mut self, fn_type: FnType) {
+        self.push_compiler(fn_type);
+        self.begin_scope();
+
+        self.expect(TokenKind::LeftParen, "expected '(' after function name");
+
+        if !self.is_at(TokenKind::RightParen) {
+            loop {
+                self.compiler.function.arity += 1;
+
+                if self.compiler.function.arity > 255 {
+                    self.error_at_current("can't have more than 255 parameters");
+                }
+
+                let idx = self.parse_variable("expect parameter name");
+                self.define_variable(idx);
+
+                if !self.is_at(TokenKind::Comma) || self.check(TokenKind::RightParen) {
+                    break
+                }
+            }
+
+            self.expect(TokenKind::RightParen, "expected ')' after function parameters");
+        }
+
+        self.expect(TokenKind::LeftBrace, "expected '{' before function body");
+
+        self.block();
+
+        let function = self.pop_compiler();
+        let idx = self.make_constant(function.into());
+        self.emit_byte_prev_line(Op::Closure(idx as u8));
     }
 
     fn statement(&mut self) {
@@ -86,6 +129,8 @@ impl<'src> Compiler<'src> {
             self.begin_scope();
             self.block();
             self.end_scope();
+        } else if self.is_at(TokenKind::Return) {
+            self.return_statement();
         } else if self.is_at(TokenKind::If) {
             self.if_statement();
         } else if self.is_at(TokenKind::While) {
@@ -111,6 +156,19 @@ impl<'src> Compiler<'src> {
         }
 
         self.expect_and_skip(TokenKind::RightBrace, "expect '}' after block");
+    }
+
+    fn return_statement(&mut self) {
+        if self.compiler.fn_type == FnType::Script {
+            self.error("can't return from top-level code");
+        }
+
+        if self.is_at(TokenKind::NewLine) {
+            self.emit_return();
+        } else {
+            self.expression();
+            self.emit_byte(Op::Return);
+        }
     }
 
     fn if_statement(&mut self) {
@@ -162,8 +220,8 @@ impl<'src> Compiler<'src> {
     fn for_statement(&mut self) {
         self.begin_scope();
         // Placeholder var
-        self.parse_variable("expected placeholder variable");
-        self.mark_initialized();
+        let idx = self.parse_variable("expected placeholder variable");
+        self.define_variable(idx);
         self.expect(TokenKind::In, "expected 'in' keyword after variable");
         
         self.expect(TokenKind::Int, "expected 'int' value to iterate on");
@@ -276,6 +334,36 @@ impl<'src> Compiler<'src> {
         }
     }
 
+    pub(super) fn call(&mut self, _: bool) {
+        let args_count = self.args_list();
+
+        self.emit_byte(Op::Call(args_count as u8));
+    }
+
+    fn args_list(&mut self) -> usize {
+        let mut count = 0;
+
+        if !self.is_at(TokenKind::RightParen) {
+            loop {
+                self.expression();
+
+                if count == 255 {
+                    self.error("can't have more than 255 arguments");
+                }
+
+                count += 1;
+
+                if !self.is_at(TokenKind::Comma) || self.check(TokenKind::RightParen) {
+                    break
+                }
+            }
+
+            self.expect(TokenKind::RightParen, "expect ')' after arguments");
+        }
+
+        count
+    }
+
     pub(super) fn float(&mut self, _: bool) {
         let val = self
             .previous
@@ -326,7 +414,7 @@ impl<'src> Compiler<'src> {
     }
 
     fn resolve_local(&mut self) -> i16 {
-        for (idx, local) in self.scope.locals.iter().enumerate().rev() {
+        for (idx, local) in self.compiler.scope.locals.iter().enumerate().rev() {
             if local.name == self.previous.lexeme {
                 if local.depth == -1 {
                     self.error("can't use local variable in its own initializer");
@@ -352,7 +440,7 @@ impl<'src> Compiler<'src> {
         let id = self.chunk_mut().write_constant(value);
 
         if id > usize::MAX {
-            self.error("Too many constant in one chunk");
+            self.error("Too many constants in one chunk");
             return 0;
         }
 
@@ -381,6 +469,11 @@ impl<'src> Compiler<'src> {
     fn emit_byte_prev_line(&mut self, byte: Op) {
         let line = if self.previous.line == 0 { 0 } else { self.previous.line - 1 };
         self.chunk_mut().write(byte, line);
+    }
+
+    pub(super) fn emit_return(&mut self) {
+        self.emit_byte(Op::Null);
+        self.emit_byte(Op::Return);
     }
 
     fn emit_jump(&mut self, jump: Op) -> usize {

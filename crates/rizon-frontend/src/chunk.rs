@@ -2,7 +2,7 @@
 use crate::value::Value;
 
 // #[derive(IntoPrimitive, TryFromPrimitive)]
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 #[repr(u8)]
 pub enum Op {
     Return,
@@ -31,6 +31,8 @@ pub enum Op {
     Loop(u16),
     CreateIter,
     ForIter(u16),
+    Call(u8),
+    Closure(u8),
 }
 
 #[derive(Default, Clone, Debug)]

@@ -1,7 +1,7 @@
-use super::Compiler;
+use super::ByteCodeGen;
 use crate::lexer::{Token, TokenKind};
 
-impl<'src> Compiler<'src> {
+impl<'src> ByteCodeGen<'src> {
     pub(super) fn advance(&mut self) {
         std::mem::swap(&mut self.previous, &mut self.current);
 

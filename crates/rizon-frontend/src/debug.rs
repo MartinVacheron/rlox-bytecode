@@ -14,7 +14,7 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) {
     if offset > 0 && chunk.lines[offset - 1] == chunk.lines[offset] {
         print!("   | ");
     } else {
-        print!("{:4} ", chunk.lines[offset]);
+        print!("{:4} ", chunk.lines[offset] + 1);
     }
 
     match &chunk.code[offset] {
@@ -44,6 +44,8 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) {
         Op::Loop(i) => jump_instruction("OP_LOOP", offset as i32, *i, -1),
         Op::CreateIter => println!("OP_CREATE_ITER"),
         Op::ForIter(i) => jump_instruction("OP_FOR_ITER", offset as i32, *i, 1),
+        Op::Call(i) => byte_instruction("OP_CALL", *i),
+        Op::Closure(i) => constant("OP_CLOSURE", chunk, *i),
     }
 }
 

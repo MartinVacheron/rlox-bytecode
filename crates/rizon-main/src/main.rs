@@ -76,6 +76,7 @@ fn repl(vm_flags: VmFlags) -> Result<(), Box<dyn Error>> {
         stdout.flush().unwrap();
 
         stdin.read_line(&mut input)?;
+        
         let trimmed_input = input.trim();
 
         if trimmed_input == "quit" {

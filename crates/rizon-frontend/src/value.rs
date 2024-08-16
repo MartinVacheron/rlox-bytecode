@@ -1,4 +1,4 @@
-use std::{fmt::Display, ops::Range};
+use std::{fmt::Display, ops::Range, rc::Rc};
 use anyhow::{bail, Result};
 
 use Value::*;
@@ -12,7 +12,9 @@ pub enum Value {
     Bool(bool),
     Str(Box<String>),
     Iter(Range<i64>),
-    Fn(Box<Function>),
+    Fn(Rc<Function>),
+    Closure(ClosureFn),
+    NativeFn(NativeFunction),
     Null,
 }
 
@@ -23,11 +25,27 @@ pub struct Function {
     pub chunk: Chunk,
 }
 
-impl PartialEq for Function {
+impl PartialEq for Function{
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
     }
 }
+
+
+pub type NativeFunction = fn(usize, usize) -> Value;
+
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ClosureFn {
+    pub function: Rc<Function>,
+}
+
+impl ClosureFn {
+    pub fn from_fn(function: &Rc<Function>) -> Self {
+        Self { function: function.clone() }
+    }
+}
+
 
 impl Value {
     pub fn add(self, other: Self) -> Option<Self> {
@@ -109,6 +127,18 @@ impl Value {
     }
 }
 
+impl Value {
+    pub fn new_closure(value: &Rc<Function>) -> Self {
+        Self::Closure(ClosureFn { function: value.clone() })
+    }
+}
+
+impl From<Function> for Value {
+    fn from(value: Function) -> Self {
+        Self::Fn(Rc::new(value))
+    }
+}
+
 
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -119,13 +149,17 @@ impl Display for Value {
             Str(v) => write!(f, "\"{}\"", v),
             Iter(v) => write!(f, "range {} -> {}", v.start, v.end),
             Null => write!(f, "null"),
-            Fn(v) => {
-                if !v.name.is_empty() {
-                    write!(f, "<fn {}>", v.name)
-                } else {
-                    write!(f, "<script>")
-                }
-            }
+            Fn(v) => print_fn(v, f),
+            NativeFn(_) => write!(f, "<native fn>"),
+            Closure(v) => print_fn(&v.function, f),
         }
+    }
+}
+
+fn print_fn(function: &Rc<Function>, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    if !function.name.is_empty() {
+        write!(f, "<fn {}>", function.name)
+    } else {
+        write!(f, "<script>")
     }
 }
