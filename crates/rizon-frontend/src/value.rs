@@ -1,4 +1,4 @@
-use std::{fmt::Display, ops::Range, rc::Rc};
+use std::{cell::RefCell, fmt::Display, ops::Range, rc::Rc};
 use anyhow::{bail, Result};
 
 use Value::*;
@@ -13,16 +13,40 @@ pub enum Value {
     Str(Box<String>),
     Iter(Range<i64>),
     Fn(Rc<Function>),
-    Closure(ClosureFn),
+    ClosureFn(Closure),
     NativeFn(NativeFunction),
     Null,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug)]
 pub struct Function {
     pub arity: usize,
     pub name: String,
     pub chunk: Chunk,
+    pub upvalues: Vec<FnUpValue>,
+}
+
+impl Function {
+    pub fn add_upvalue(&mut self, index: u8, is_local: bool) {
+        self.upvalues.push(FnUpValue { index, is_local });
+    }
+}
+
+impl Default for Function {
+    fn default() -> Self {
+        Self {
+            arity: 0,
+            name: "".into(),
+            chunk: Chunk::default(),
+            upvalues: Vec::with_capacity(256),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FnUpValue {
+    pub index: u8,
+    pub is_local: bool,
 }
 
 impl PartialEq for Function{
@@ -32,19 +56,36 @@ impl PartialEq for Function{
 }
 
 
-pub type NativeFunction = fn(usize, usize) -> Value;
-
-
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct ClosureFn {
+pub struct Closure {
     pub function: Rc<Function>,
+     // Multiple closure can point to the same upvalue (non local ones)
+    pub upvalues: Vec<Rc<RefCell<UpValue>>>,
 }
 
-impl ClosureFn {
+impl Closure {
     pub fn from_fn(function: &Rc<Function>) -> Self {
-        Self { function: function.clone() }
+        Self {
+            function: function.clone(),
+            upvalues: Vec::with_capacity(function.upvalues.len()),
+        }
     }
 }
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct UpValue {
+    pub location: usize,
+    pub closed: Option<Value>,
+}
+
+impl UpValue {
+    pub fn new(location: usize) -> Self {
+        Self { location, closed: None }
+    }
+}
+
+
+pub type NativeFunction = fn(usize, usize) -> Value;
 
 
 impl Value {
@@ -87,6 +128,9 @@ impl Value {
             (Float(v1), Float(v2)) => Some(Bool(v1 == v2)),
             (Bool(v1), Bool(v2)) => Some(Bool(v1 == v2)),
             (Str(v1), Str(v2)) => Some(Bool(v1 == v2)),
+            (Null, Null) => Some(Bool(true)),
+            (_, Null) => Some(Bool(false)),
+            (Null, _) => Some(Bool(false)),
             _ => None,
         }
     }
@@ -129,7 +173,7 @@ impl Value {
 
 impl Value {
     pub fn new_closure(value: &Rc<Function>) -> Self {
-        Self::Closure(ClosureFn { function: value.clone() })
+        Self::ClosureFn(Closure::from_fn(value))
     }
 }
 
@@ -151,7 +195,7 @@ impl Display for Value {
             Null => write!(f, "null"),
             Fn(v) => print_fn(v, f),
             NativeFn(_) => write!(f, "<native fn>"),
-            Closure(v) => print_fn(&v.function, f),
+            ClosureFn(v) => print_fn(&v.function, f),
         }
     }
 }

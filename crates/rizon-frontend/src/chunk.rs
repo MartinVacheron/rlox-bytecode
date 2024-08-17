@@ -33,6 +33,9 @@ pub enum Op {
     ForIter(u16),
     Call(u8),
     Closure(u8),
+    GetUpValue(u8),
+    SetUpValue(u8),
+    CloseUpValue,
 }
 
 #[derive(Default, Clone, Debug)]

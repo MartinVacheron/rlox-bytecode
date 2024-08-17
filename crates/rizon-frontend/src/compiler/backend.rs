@@ -1,7 +1,8 @@
 use crate::{chunk::Op, lexer::TokenKind, value::Value};
 
-use super::{rules::Rule, ByteCodeGen, FnType, Precedence};
+use super::{rules::Rule, ByteCodeGen, Compiler, FnType, Precedence};
 
+use anyhow::Context;
 use Precedence as P;
 
 
@@ -226,7 +227,8 @@ impl<'src> ByteCodeGen<'src> {
         
         self.expect(TokenKind::Int, "expected 'int' value to iterate on");
         self.int(false);
-        self.emit_byte(Op::CreateIter); // Create Value::Iter en popant la valeur de number avant
+        self.emit_byte(Op::CreateIter);
+        self.add_local("iter");
 
         let loop_start = self.chunk_last_idx();
         let exit_jump = self.emit_jump(Op::ForIter(0xffff));  // Prend la 1ere locale (placeholder) et assign la valeur de iter.next()
@@ -395,14 +397,19 @@ impl<'src> ByteCodeGen<'src> {
     }
 
     fn named_variable(&mut self, can_assign: bool) {
-        let id = self.resolve_local();
+        let idx = self.compiler.resolve_local(&self.previous.lexeme);
 
-        let (set_op, get_op) = match id {
-            -1 => {
-                let id = self.identifier_constant();
-                (Op::SetGlobal(id as u8), Op::GetGlobal(id as u8))
+        let (set_op, get_op) = match idx {
+            None => {
+                match self.compiler.resolve_upvalue(&self.previous.lexeme) {
+                    Some(upval_idx) => (Op::SetUpValue(upval_idx), Op::GetUpValue(upval_idx)),
+                    None => {
+                        let id = self.identifier_constant() as u8;
+                        (Op::SetGlobal(id), Op::GetGlobal(id))
+                    }
+                }
             },
-            _ => (Op::SetLocal(id as u8), Op::GetLocal(id as u8))
+            Some(local_idx) => (Op::SetLocal(local_idx), Op::GetLocal(local_idx)),
         };
 
         if self.is_at(TokenKind::Equal) && can_assign {
@@ -411,20 +418,6 @@ impl<'src> ByteCodeGen<'src> {
         } else {
             self.emit_byte(get_op);
         }
-    }
-
-    fn resolve_local(&mut self) -> i16 {
-        for (idx, local) in self.compiler.scope.locals.iter().enumerate().rev() {
-            if local.name == self.previous.lexeme {
-                if local.depth == -1 {
-                    self.error("can't use local variable in its own initializer");
-                }
-
-                return idx as i16
-            }
-        }
-
-        return -1
     }
 
     pub(super) fn literal(&mut self, _: bool) {
@@ -439,7 +432,7 @@ impl<'src> ByteCodeGen<'src> {
     fn make_constant(&mut self, value: Value) -> usize {
         let id = self.chunk_mut().write_constant(value);
 
-        if id > usize::MAX {
+        if id > u8::max as usize {
             self.error("Too many constants in one chunk");
             return 0;
         }

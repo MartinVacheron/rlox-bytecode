@@ -50,6 +50,7 @@ impl Precedence {
 struct Local<'src> {
     name: &'src str,
     depth: i16,
+    is_captured: bool,
 }
 
 const MAX_LOCALS: usize = std::u8::MAX as usize + 1;
@@ -83,9 +84,11 @@ struct Compiler<'src> {
 }
 
 impl<'src> Compiler<'src> {
+    const LOCAL_COUNT: usize = u8::MAX as usize + 1;
+
     pub fn new(fn_type: FnType) -> Box<Self> {
         let mut scope = Scope::default();
-        scope.locals.push(Local { name: "", depth: 0 });
+        scope.locals.push(Local { name: "", depth: 0, is_captured: false });
 
         Box::new(Self {
             fn_type,
@@ -93,6 +96,54 @@ impl<'src> Compiler<'src> {
             enclosing: None,
             function: Function::default(),
         })
+    }
+
+    fn resolve_local(&self, name: &str) -> Option<u8> {
+        for (idx, local) in self.scope.locals.iter().enumerate().rev() {
+            if local.name == name {
+                if local.depth == -1 {
+                    eprintln!("can't use local variable in its own initializer");
+                }
+
+                return Some(idx as u8)
+            }
+        }
+
+        return None
+    }
+
+    pub fn resolve_upvalue(&mut self, name: &str) -> Option<u8> {
+        if let Some(enclosing) = &mut self.enclosing {
+            if let Some(local_id) = enclosing.resolve_local(name) {
+                // We put the information in enclosing compiler
+                enclosing.scope.locals[local_id as usize].is_captured = true;
+                return Some(self.add_upvalue(local_id, true))
+            }
+
+            if let Some(upval_id) = enclosing.resolve_upvalue(name) {
+                return Some(self.add_upvalue(upval_id, false))
+            }
+        }
+
+        None
+    }
+
+    fn add_upvalue(&mut self, idx: u8, is_local: bool) -> u8 {
+        let upvalue_count = self.function.upvalues.len();
+
+        for (i, upvalue) in self.function.upvalues.iter().enumerate() {
+            if upvalue.index == idx && upvalue.is_local == is_local {
+                return i as u8
+            }
+        }
+
+        if upvalue_count == Self::LOCAL_COUNT {
+            eprintln!("too many closure variables in function")
+        }
+
+        self.function.add_upvalue(idx, is_local);
+
+        upvalue_count as u8
     }
 }
 
@@ -170,9 +221,13 @@ impl<'src> ByteCodeGen<'src> {
 
         for idx in (0..self.compiler.scope.locals.len()).rev() {
             if self.compiler.scope.locals[idx].depth > self.compiler.scope.depth {
-                self.compiler.scope.locals.pop();
+                if self.compiler.scope.locals[idx].is_captured {
+                    self.emit_byte(Op::CloseUpValue);
+                } else {
+                    self.emit_byte(Op::Pop);
+                }
 
-                self.emit_byte(Op::Pop);
+                self.compiler.scope.locals.pop();
             } else {
                 break;
             }
@@ -180,7 +235,7 @@ impl<'src> ByteCodeGen<'src> {
     }
 
     fn add_local(&mut self, name: &'src str) {
-        let local = Local { name, depth: -1 };
+        let local = Local { name, depth: -1, is_captured: false };
 
         self.compiler.scope.locals.push(local);
     }

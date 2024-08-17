@@ -1,90 +1,184 @@
-for i in 5 {
-    print i
-}
-
-
-var breakfast = "beignets"
-var beverage = "cafe au lait"
-breakfast = "beignets with " + beverage
-print breakfast
-
-
-{
-    var a = 1
-    print a
-
-    a = 2
-    print a
-
-    {
-        print a
-        var a = 56
-        print a
-    }
-
-    print a
-}
-
-
-if true {
-    print "it's true!"
-} else {
-    print "it's false"
-}
-
-if !true {
-    print "it's true!"
-} else {
-    print "it's false"
-}
-
-
-var i = 0
-while i < 2 {
-    i = i + 1
-    print i
-}
-
-print i
-
-
-fn are_we_fn_yet() {
-    print "yes we are!"
-}
-
-print are_we_fn_yet
-
-
-fn add(a, b) {
-    print a + b
-}
-
-add(1, 2)
-
-// fn a() { b() }
-// fn b() { c() }
-// fn c() {
-//   c("too", "many")
+// for i in 5 {
+//     print i
 // }
 
-// a()
+// fn loop() {
+//     for i in 5 {
+//         print i
+//     }
+
+//     var e = 0
+//     if e == 0 {
+//         // var h = 9 // Error
+//         print "oui"
+//     }
+
+//     fn test() {
+//         print "test fn"
+//     }
+// }
+// loop()
+
+// var breakfast = "beignets"
+// var beverage = "cafe au lait"
+// breakfast = "beignets with " + beverage
+// print breakfast
 
 
-fn mul(a, b) {
-    return a * b
-}
+// {
+//     var a = 1
+//     print a
 
-print mul(-2, 8)
+//     a = 2
+//     print a
+
+//     {
+//         print a
+//         var a = 56
+//         print a
+//     }
+
+//     print a
+// }
 
 
-fn fib(n) {
-    if n < 2 {
-        return n
-    }
+// if true {
+//     print "it's true!"
+// } else {
+//     print "it's false"
+// }
 
-    return fib(n - 2) + fib(n - 1)
-}
+// if !true {
+//     print "it's true!"
+// } else {
+//     print "it's false"
+// }
 
-var start = clock()
-print fib(25)
-print clock() - start
+
+// var i = 0
+// while i < 2 {
+//     i = i + 1
+//     print i
+// }
+
+// print i
+
+
+// fn are_we_fn_yet() {
+//     print "yes we are!"
+// }
+
+// print are_we_fn_yet
+
+
+// fn add(a, b) {
+//     print a + b
+// }
+
+// add(1, 2)
+
+// // fn a() { b() }
+// // fn b() { c() }
+// // fn c() {
+// //   c("too", "many")
+// // }
+
+// // a()
+
+
+// fn mul(a, b) {
+//     return a * b
+// }
+
+// print mul(-2, 8)
+
+
+// fn fib(n) {
+//     if n < 2 {
+//         return n
+//     }
+
+//     return fib(n - 2) + fib(n - 1)
+// }
+
+// var start = clock()
+// print fib(25)
+// print clock() - start
+
+
+/// Closure with upvalue
+// fn outer() {
+//   var x = "outside"
+//   fn inner() {
+//     print x
+//   }
+//   inner()
+// }
+// outer()
+
+
+/// Closure with upvalue that was discarded from the stack because
+/// call to outer() emptys its scope/stack for ever
+// fn outer() {
+//   var x = "outside"
+//   fn inner() {
+//     print x
+//   }
+
+//   return inner
+// }
+
+// var closure = outer()
+// closure()
+
+
+
+// var globalOne
+// var globalTwo
+
+// fn main() {
+//     {
+//         var a = "one"
+//         fn one() {
+//             print a
+//         }
+//         globalOne = one
+//     }
+
+//     {
+//         var a = "two"
+//         fn two() {
+//             print a
+//         }
+//         globalTwo = two
+//     }
+// }
+
+// main()
+// globalOne()
+// globalTwo()
+
+
+/// Closing over loop variable?
+/// https://craftinginterpreters.com/closures.html#design-note
+// var globalOne
+// var globalTwo
+
+// fn main() {
+//     for a in 2 {
+//         fn closure() {
+//             print a
+//         }
+
+//         if globalOne == null {
+//             globalOne = closure
+//         }
+//         else {
+//             globalTwo = closure
+//         }
+//     }
+// }
+
+// main()
+// globalOne()
+// globalTwo()

@@ -1,4 +1,4 @@
-use crate::chunk::{Chunk, Op};
+use crate::{chunk::{Chunk, Op}, value::{FnUpValue, Value}};
 
 pub fn disassemble(chunk: &Chunk, name: &str) {
     println!("\t\t== {} ==", name);
@@ -45,7 +45,10 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) {
         Op::CreateIter => println!("OP_CREATE_ITER"),
         Op::ForIter(i) => jump_instruction("OP_FOR_ITER", offset as i32, *i, 1),
         Op::Call(i) => byte_instruction("OP_CALL", *i),
-        Op::Closure(i) => constant("OP_CLOSURE", chunk, *i),
+        Op::Closure(i) => closure_instruction(offset, chunk, *i),
+        Op::GetUpValue(i) => byte_instruction("OP_GET_UPVALUE", *i),
+        Op::SetUpValue(i) => byte_instruction("OP_SET_UPVALUE", *i),
+        Op::CloseUpValue => println!("OP_CLOSE_VALUE"),
     }
 }
 
@@ -59,4 +62,16 @@ fn byte_instruction(name: &str, slot: u8) {
 
 fn jump_instruction(name: &str, start: i32, offset: u16, sign: i32) {
     println!("{:16} {} -> {}", name, start, 1 + start + offset as i32 * sign);
+}
+
+fn closure_instruction(offset: usize, chunk: &Chunk, idx: u8) {
+    let closure = &chunk.constants[idx as usize];
+    println!("{:16} {} '{}'", "OP_CLOSURE", idx, closure);
+
+    if let Value::ClosureFn(c) = closure {
+        for (i, FnUpValue { index, is_local }) in c.function.upvalues.iter().enumerate() {
+            let local = if *is_local { "local" } else { "upvalue" };
+            println!("{:04}      |                     {} {}", offset + i, local, index);
+        }
+    }
 }

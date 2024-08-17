@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -6,7 +7,7 @@ use thiserror::Error;
 use crate::chunk::Op;
 use crate::compiler::ByteCodeGen;
 use crate::debug::disassemble_instruction;
-use crate::value::{ClosureFn, Function, NativeFunction, Value};
+use crate::value::{Closure, Function, NativeFunction, UpValue, FnUpValue, Value};
 
 use crate::native_fn::clock;
 
@@ -28,30 +29,32 @@ pub enum VmErr {
 
 pub type VmRes = Result<(), VmErr>;
 
-// TODO: Vec with capacity FRAMES_MAX (64) * UINT_8_MAX
-
-const FRAMES_MAX: usize = 64 * u8::MAX as usize;
 
 #[derive(Debug)]
 struct CallFrame {
-    closure: ClosureFn,
+    closure: Closure,
     ip: usize,
     slots: usize,
 }
 
 #[derive(Default)]
 pub struct Vm {
+    flags: VmFlags,
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
-    flags: VmFlags,
     globals: HashMap<String, Value>,
+    open_upvalues: Vec<Rc<RefCell<UpValue>>>,
 }
 
 impl Vm {
+    const FRAMES_MAX: usize = 64;
+    const STACK_SIZE: usize = Self::FRAMES_MAX * u8::MAX as usize;
+
     pub fn new(flags: VmFlags) -> Self {
         let mut vm = Self {
             flags,
-            frames: Vec::with_capacity(FRAMES_MAX),
+            stack: Vec::with_capacity(Self::STACK_SIZE),
+            frames: Vec::with_capacity(Self::FRAMES_MAX),
             ..Default::default()
         };
 
@@ -70,7 +73,7 @@ impl Vm {
         self.push(Value::Fn(function.clone()));
 
         self.frames.push(CallFrame {
-            closure: ClosureFn::from_fn(&function),
+            closure: Closure::from_fn(&function),
             ip: 0,
             slots: 0,
         });
@@ -98,6 +101,9 @@ impl Vm {
                 Op::Return => {
                     let res = self.pop();
                     let old = self.frames.pop().unwrap();
+
+                    // Close all upvalues that must live longer than the function
+                    self.close_upvalue(old.slots);
 
                     if self.frames.is_empty() {
                         // Fictive 'main' function
@@ -209,6 +215,9 @@ impl Vm {
                             Some(v) => {
                                 if let Value::Int(i) = self.peek_mut(1) {
                                     *i = v;
+                                } else {
+                                    self.runtime_err("failed to get next integer iterator value");
+                                    return Err(VmErr::Runtime);
                                 }
                             }
                             None => {
@@ -216,6 +225,10 @@ impl Vm {
                                 self.frame_mut().ip += idx as usize
                             }
                         }
+                    } else {
+                        dbg!(&self.stack);
+                        dbg!(self.peek(0));
+                        panic!("failed to find iterator")
                     }
                 }
                 Op::Call(args_count) => {
@@ -226,11 +239,52 @@ impl Vm {
                     }
                 }
                 Op::Closure(idx) => {
-                    let function = &self.frame().closure.function.chunk.constants[idx as usize];
+                    let function = if let Value::Fn(f) = &self.frame().closure.function.chunk.constants[idx as usize] {
+                        Rc::clone(f)
+                    } else {
+                        panic!("non function closure call")
+                    };
 
-                    if let Value::Fn(f) = function {
-                        self.push(Value::new_closure(f));
+                    let mut closure = Closure::from_fn(&function);
+
+                    for FnUpValue { index, is_local } in &function.upvalues {
+                        if *is_local {
+                            closure.upvalues.push(self.capture_value(self.frame().slots + *index as usize));
+                        } else {
+                            // OP_CLOSURE emitted at the end of fn declaration so we are in the surrounding one
+                            closure.upvalues.push(Rc::clone(&self.frame().closure.upvalues[*index as usize]));
+                        }
                     }
+
+                    self.push(Value::ClosureFn(closure));
+                },
+                Op::GetUpValue(idx) => {
+                    let val = {
+                        let upval = self.frame().closure.upvalues[idx as usize].borrow();
+
+                        match &upval.closed {
+                            Some(v) => v.clone(),
+                            None => self.stack[upval.location].clone(),
+                        }
+                    };
+
+                    self.push(val);
+                }
+                Op::SetUpValue(idx) => {
+                    let upval = Rc::clone(&self.frame().closure.upvalues[idx as usize]);
+                    let mut upval = upval.borrow_mut();
+
+                    let val_assign = self.peek(0).clone();
+
+                    if upval.closed.is_none() {
+                        self.stack[upval.location] = val_assign;
+                    } else {
+                        upval.closed = Some(val_assign);
+                    }
+                },
+                Op::CloseUpValue => {
+                    self.close_upvalue(self.stack.len() - 1);
+                    self.pop();
                 },
             }
         }
@@ -240,6 +294,7 @@ impl Vm {
         // Pop backward as it is a stack
         let (rhs, lhs) = (self.pop(), self.pop());
 
+        dbg!(&lhs, &rhs, operation);
         match operation(lhs, rhs) {
             Some(res) => self.push(res),
             None => self.runtime_err("Operation not allowed"),
@@ -248,7 +303,7 @@ impl Vm {
 
     fn call_value(&mut self, callee: Value, args_count: u8) -> VmRes {
         match callee {
-            Value::Closure(f) => return self.call(f, args_count),
+            Value::ClosureFn(f) => return self.call(f, args_count),
             Value::NativeFn(f) => {
                 let res = f(args_count as usize, (self.stack.len() - 1) - args_count as usize);
                 self.stack.truncate(self.stack.len() - args_count as usize + 1);
@@ -263,8 +318,8 @@ impl Vm {
         Ok(())
     }
 
-    fn call(&mut self, closure: ClosureFn, args_count: u8) -> VmRes {
-        if self.frames.len() == FRAMES_MAX {
+    fn call(&mut self, closure: Closure, args_count: u8) -> VmRes {
+        if self.frames.len() == Self::FRAMES_MAX {
             self.runtime_err("stack overflow");
             return Err(VmErr::Runtime)
         }
@@ -285,6 +340,46 @@ impl Vm {
         });
 
         Ok(())
+    }
+
+    fn capture_value(&mut self, index: usize) -> Rc<RefCell<UpValue>> {
+        // Ensure only one UpValue pointing to a slot
+        for upval in self.open_upvalues.iter().rev() {
+            if upval.borrow().location < index {
+                break
+            }
+            
+            if upval.borrow().location == index {
+                return Rc::clone(upval)
+            }
+        }
+
+        let new_upval = Rc::new(RefCell::new(UpValue::new(index)));
+        self.open_upvalues.push(Rc::clone(&new_upval));
+        new_upval
+    }
+
+    // Close all upvalues that point to slot above it in the stack
+    fn close_upvalue(&mut self, last: usize) {
+        let mut i = self.open_upvalues.len();
+
+        loop {
+            if i < 1 {
+                break
+            }
+
+            let mut upval = self.open_upvalues[i - 1].borrow_mut();
+
+            if upval.location < last {
+                break
+            }
+
+            upval.closed = Some(self.stack[upval.location].clone());
+
+            i -= 1;
+        }
+
+        self.open_upvalues.truncate(i);
     }
 
     fn define_native(&mut self, name: &str, function: NativeFunction) {
