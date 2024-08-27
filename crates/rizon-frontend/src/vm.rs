@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::chunk::Op;
 use crate::compiler::ByteCodeGen;
 use crate::debug::disassemble_instruction;
-use crate::value::{Closure, Function, NativeFunction, UpValue, FnUpValue, Value};
+use crate::value::{Closure, FnUpValue, NativeFunction, UpValue, Value};
 
 use crate::native_fn::clock;
 
@@ -209,26 +209,23 @@ impl Vm {
                         return Err(VmErr::Runtime);
                     }
                 }
-                Op::ForIter(idx) => {
-                    if let Value::Iter(iter) = self.peek_mut(0) {
+                Op::ForIter(iter, idx) => {
+                    let iter_idx = self.frame().slots + iter as usize;
+                    
+                    if let Value::Iter(iter) = &mut self.stack[iter_idx] {
                         match iter.next() {
                             Some(v) => {
-                                if let Value::Int(i) = self.peek_mut(1) {
+                                if let Value::Int(i) = &mut self.stack[iter_idx - 1] {
                                     *i = v;
                                 } else {
                                     self.runtime_err("failed to get next integer iterator value");
                                     return Err(VmErr::Runtime);
                                 }
                             }
-                            None => {
-                                self.pop();
-                                self.frame_mut().ip += idx as usize
-                            }
+                            None => self.frame_mut().ip += idx as usize
                         }
                     } else {
-                        dbg!(&self.stack);
-                        dbg!(self.peek(0));
-                        panic!("failed to find iterator")
+                        panic!("failed to find iterator: {}", &self.stack[iter_idx])
                     }
                 }
                 Op::Call(args_count) => {
@@ -242,7 +239,7 @@ impl Vm {
                     let function = if let Value::Fn(f) = &self.frame().closure.function.chunk.constants[idx as usize] {
                         Rc::clone(f)
                     } else {
-                        panic!("non function closure call")
+                        panic!("closure instruction without function value")
                     };
 
                     let mut closure = Closure::from_fn(&function);
@@ -294,7 +291,6 @@ impl Vm {
         // Pop backward as it is a stack
         let (rhs, lhs) = (self.pop(), self.pop());
 
-        dbg!(&lhs, &rhs, operation);
         match operation(lhs, rhs) {
             Some(res) => self.push(res),
             None => self.runtime_err("Operation not allowed"),
@@ -394,7 +390,7 @@ impl Vm {
         self.stack.push(value);
     }
 
-    // TODO: Use [len() -1] to avoid unwraping for performance
+    // PERF: Use [len() -1] to avoid unwraping for performance
     fn frame(&self) -> &CallFrame {
         self.frames.last().unwrap()
     }
@@ -403,6 +399,7 @@ impl Vm {
         self.frames.last_mut().unwrap()
     }
 
+    // PERF: Cache stack.len()?
     fn peek(&self, distance: usize) -> &Value {
         &self.stack[self.stack.len() - distance - 1]
     }

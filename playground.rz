@@ -1,6 +1,15 @@
 // for i in 5 {
+//     var e = 9
 //     print i
 // }
+
+// fn foo() {
+//     for i in 5 {
+//         var e = 9
+//         print i
+//     }
+// }
+// foo()
 
 // fn loop() {
 //     for i in 5 {
@@ -9,7 +18,6 @@
 
 //     var e = 0
 //     if e == 0 {
-//         // var h = 9 // Error
 //         print "oui"
 //     }
 
@@ -18,6 +26,16 @@
 //     }
 // }
 // loop()
+
+
+// for i in 2 {
+//     var a = 4
+//     for j in 3 {
+//         print j + i*3
+//     }
+//     var i = 0
+// }
+
 
 // var breakfast = "beignets"
 // var beverage = "cafe au lait"
@@ -54,6 +72,18 @@
 //     print "it's false"
 // }
 
+// if true or false {
+//     print "true again"
+// }
+// if !false and true {
+//     print "true again!!"
+// }
+// if true and false {
+    
+// } else {
+//     print "false again"
+// }
+
 
 // var i = 0
 // while i < 2 {
@@ -77,13 +107,13 @@
 
 // add(1, 2)
 
-// // fn a() { b() }
-// // fn b() { c() }
-// // fn c() {
-// //   c("too", "many")
-// // }
+// fn a() { b() }
+// fn b() { c() }
+// fn c() {
+//   c("too", "many")
+// }
 
-// // a()
+// a()
 
 
 // fn mul(a, b) {
@@ -176,6 +206,8 @@
 //         else {
 //             globalTwo = closure
 //         }
+
+//         print a
 //     }
 // }
 

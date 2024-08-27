@@ -1,8 +1,7 @@
 use crate::{chunk::Op, lexer::TokenKind, value::Value};
 
-use super::{rules::Rule, ByteCodeGen, Compiler, FnType, Precedence};
+use super::{rules::Rule, ByteCodeGen, FnType, Precedence};
 
-use anyhow::Context;
 use Precedence as P;
 
 
@@ -226,13 +225,21 @@ impl<'src> ByteCodeGen<'src> {
         self.expect(TokenKind::In, "expected 'in' keyword after variable");
         
         self.expect(TokenKind::Int, "expected 'int' value to iterate on");
-        self.int(false);
+        self.int(false); // placeholder value. It takes the range int as value
         self.emit_byte(Op::CreateIter);
-        self.add_local("iter");
+        // Because the VM pushes a Value::Iter on the stack too
+        // it's to keep them aligned. Mark initialized is important for the depth
+        self.add_local("__iter");
+        self.mark_initialized();
+        let iter_idx = self.compiler.scope.locals.len() - 1;
 
         let loop_start = self.chunk_last_idx();
-        let exit_jump = self.emit_jump(Op::ForIter(0xffff));  // Prend la 1ere locale (placeholder) et assign la valeur de iter.next()
+        let exit_jump = self.emit_jump(Op::ForIter(iter_idx as u8, 0xffff));
 
+        // self.expect_and_skip(TokenKind::LeftBrace, "expect '{' before 'while' body");
+        // self.block();
+        // The fact of doing a scope with statement allow to clean the whole loop before
+        // starting the next round.
         self.statement();
         self.emit_loop(loop_start);
 
@@ -476,8 +483,8 @@ impl<'src> ByteCodeGen<'src> {
     }
 
     fn emit_loop(&mut self, start: usize) {
-        // +1 because we want to jump one more backward to jump over
-        // Op::Loop (inverse of Jump)
+        // +1 because when we hit the Op::Loop, we are already passed it
+        // we have to jump 1 more backward
         let offset = self.chunk_last_idx() + 1 - start;
 
         let offset = match u16::try_from(offset) {
@@ -504,7 +511,7 @@ impl<'src> ByteCodeGen<'src> {
         match &mut self.chunk_mut().code[jump_idx] {
             Op::JumpIfFalse(i)
             | Op::Jump(i)
-            | Op::ForIter(i) => *i = offset as u16,
+            | Op::ForIter(_, i) => *i = offset as u16,
             other => {
                 unreachable!("Found: {:?}", other)
             }

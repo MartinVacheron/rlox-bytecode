@@ -2,8 +2,8 @@ use std::{cell::RefCell, fmt::Display, ops::Range, rc::Rc};
 use anyhow::{bail, Result};
 
 use Value::*;
-
 use crate::chunk::Chunk;
+
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Value {
@@ -17,6 +17,9 @@ pub enum Value {
     NativeFn(NativeFunction),
     Null,
 }
+
+pub type NativeFunction = fn(usize, usize) -> Value;
+
 
 #[derive(Debug)]
 pub struct Function {
@@ -83,9 +86,6 @@ impl UpValue {
         Self { location, closed: None }
     }
 }
-
-
-pub type NativeFunction = fn(usize, usize) -> Value;
 
 
 impl Value {

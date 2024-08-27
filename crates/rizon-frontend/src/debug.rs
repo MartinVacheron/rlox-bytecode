@@ -39,11 +39,11 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) {
         Op::SetGlobal(i) => constant("OP_SET_GLOBAL", chunk, *i),
         Op::GetLocal(i) => byte_instruction("OP_GET_LOCAL", *i),
         Op::SetLocal(i) => byte_instruction("OP_SET_LOCAL", *i),
-        Op::JumpIfFalse(i) => jump_instruction("JUMP_IF_FALSE", offset as i32, *i, 1),
-        Op::Jump(i) => jump_instruction("OP_JUMP", offset as i32, *i, 1),
-        Op::Loop(i) => jump_instruction("OP_LOOP", offset as i32, *i, -1),
+        Op::JumpIfFalse(i) => jump_instruction("JUMP_IF_FALSE", offset as i32, *i),
+        Op::Jump(i) => jump_instruction("OP_JUMP", offset as i32, *i),
+        Op::Loop(i) => loop_instruction("OP_LOOP", offset as i32, *i),
         Op::CreateIter => println!("OP_CREATE_ITER"),
-        Op::ForIter(i) => jump_instruction("OP_FOR_ITER", offset as i32, *i, 1),
+        Op::ForIter(_, i) => jump_instruction("OP_FOR_ITER", offset as i32, *i),
         Op::Call(i) => byte_instruction("OP_CALL", *i),
         Op::Closure(i) => closure_instruction(offset, chunk, *i),
         Op::GetUpValue(i) => byte_instruction("OP_GET_UPVALUE", *i),
@@ -60,8 +60,13 @@ fn byte_instruction(name: &str, slot: u8) {
     println!("{:16} {}", name, slot);
 }
 
-fn jump_instruction(name: &str, start: i32, offset: u16, sign: i32) {
-    println!("{:16} {} -> {}", name, start, 1 + start + offset as i32 * sign);
+fn jump_instruction(name: &str, start: i32, offset: u16) {
+    println!("{:16} {} -> {}", name, start, start + offset as i32 + 1);
+}
+
+// +1 is ok, it's because the Op::Loop is taken into account
+fn loop_instruction(name: &str, start: i32, offset: u16) {
+    println!("{:16} {} -> {}", name, start, start + 1 + offset as i32 * -1);
 }
 
 fn closure_instruction(offset: usize, chunk: &Chunk, idx: u8) {

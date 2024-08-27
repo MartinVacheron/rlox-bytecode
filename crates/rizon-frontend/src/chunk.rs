@@ -30,7 +30,7 @@ pub enum Op {
     Jump(u16),
     Loop(u16),
     CreateIter,
-    ForIter(u16),
+    ForIter(u8, u16), // Local index of the iterator variable as first arg
     Call(u8),
     Closure(u8),
     GetUpValue(u8),

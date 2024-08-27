@@ -55,6 +55,7 @@ struct Local<'src> {
 
 const MAX_LOCALS: usize = std::u8::MAX as usize + 1;
 
+#[derive(Debug)]
 struct Scope<'src> {
     locals: Vec<Local<'src>>,
     depth: i16,
@@ -158,7 +159,6 @@ pub struct ByteCodeGen<'src> {
     panic_mode: bool,
     // Backend
     rules: Rules<'src>,
-    // TODO: Box needed?
     compiler: Box<Compiler<'src>>,
 }
 
