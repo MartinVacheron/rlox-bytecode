@@ -13,6 +13,8 @@ impl<'src> ByteCodeGen<'src> {
             self.var_declaration();
         } else if self.is_at(TokenKind::Fn) {
             self.fn_declaration();
+        } else if self.is_at(TokenKind::Struct) {
+            self.struct_declaration();
         } else {
             self.statement();
         }
@@ -35,7 +37,7 @@ impl<'src> ByteCodeGen<'src> {
         self.define_variable(id);
     }
 
-    fn parse_variable(&mut self, msg: &str) -> usize {
+    fn parse_variable(&mut self, msg: &str) -> u8 {
         self.expect(TokenKind::Identifier, msg);
 
         self.declare_variable();
@@ -67,18 +69,18 @@ impl<'src> ByteCodeGen<'src> {
         self.add_local(&self.previous.lexeme);
     }
 
-    fn identifier_constant(&mut self) -> usize {
+    fn identifier_constant(&mut self) -> u8 {
         let name = Value::Str(Box::new(self.previous.lexeme.to_string()));
         self.make_constant(name)
     }
 
-    fn define_variable(&mut self, id: usize) {
+    fn define_variable(&mut self, id: u8) {
         if self.compiler.scope.depth > 0 {
             self.mark_initialized();
             return
         }
 
-        self.emit_byte_prev_line(Op::DefineGlobal(id as u8))
+        self.emit_byte_prev_line(Op::DefineGlobal(id))
     }
 
     fn fn_declaration(&mut self) {
@@ -119,7 +121,43 @@ impl<'src> ByteCodeGen<'src> {
 
         let function = self.pop_compiler();
         let idx = self.make_constant(function.into());
-        self.emit_byte_prev_line(Op::Closure(idx as u8));
+        self.emit_byte_prev_line(Op::Closure(idx));
+    }
+
+    fn struct_declaration(&mut self) {
+        self.expect_and_skip(TokenKind::Identifier, "expect structure name after 'struct' keyword");
+        let name_idx = self.identifier_constant();
+        self.declare_variable();
+
+        self.emit_byte(Op::Struct(name_idx));
+        // Make it available for self reference in its body
+        self.define_variable(name_idx);
+
+        // Loads the struct variable on the stack so that each Op::Method
+        // is right next to it
+        // The name is the previous token (used in identifier_constant)
+        self.named_variable(false);
+        self.expect_and_skip(TokenKind::LeftBrace, "expected '{' before structure body");
+
+        if self.check(TokenKind::Fn) {
+            while !self.check(TokenKind::RightBrace) && !self.check(TokenKind::Eof) {
+                self.expect(TokenKind::Fn, "expect 'fn' keyword to declare methods");
+                self.method();
+                self.skip_new_lines();
+            }
+        }
+
+        // Pop the structure variable
+        // self.emit_byte(Op::Pop);
+
+        self.expect_and_skip(TokenKind::RightBrace, "expected '}' after structure body");
+    }
+
+    fn method(&mut self) {
+        self.expect_and_skip(TokenKind::Identifier, "expect method name");
+        let name_idx = self.identifier_constant();
+        self.function(FnType::Function);
+        self.emit_byte(Op::Method(name_idx));
     }
 
     fn statement(&mut self) {
@@ -349,6 +387,18 @@ impl<'src> ByteCodeGen<'src> {
         self.emit_byte(Op::Call(args_count as u8));
     }
 
+    pub(super) fn dot(&mut self, can_assign: bool) {
+        self.expect(TokenKind::Identifier, "expect property name after '.'");
+        let idx = self.identifier_constant();
+
+        if can_assign && self.is_at(TokenKind::Equal) {
+            self.expression();
+            self.emit_byte(Op::SetProperty(idx));
+        } else {
+            self.emit_byte(Op::GetProperty(idx));
+        }
+    }
+
     fn args_list(&mut self) -> usize {
         let mut count = 0;
 
@@ -411,7 +461,7 @@ impl<'src> ByteCodeGen<'src> {
                 match self.compiler.resolve_upvalue(&self.previous.lexeme) {
                     Some(upval_idx) => (Op::SetUpValue(upval_idx), Op::GetUpValue(upval_idx)),
                     None => {
-                        let id = self.identifier_constant() as u8;
+                        let id = self.identifier_constant();
                         (Op::SetGlobal(id), Op::GetGlobal(id))
                     }
                 }
@@ -436,7 +486,7 @@ impl<'src> ByteCodeGen<'src> {
         }
     }
 
-    fn make_constant(&mut self, value: Value) -> usize {
+    fn make_constant(&mut self, value: Value) -> u8 {
         let id = self.chunk_mut().write_constant(value);
 
         if id > u8::max as usize {
@@ -444,7 +494,7 @@ impl<'src> ByteCodeGen<'src> {
             return 0;
         }
 
-        id
+        id as u8
     }
 
     fn get_rule(&self, kind: TokenKind) -> &Rule<'src> {
@@ -452,7 +502,7 @@ impl<'src> ByteCodeGen<'src> {
     }
 
     fn emit_constant(&mut self, value: Value) {
-        let id = self.make_constant(value) as u8;
+        let id = self.make_constant(value);
         self.emit_byte(Op::Constant(id));
     }
 

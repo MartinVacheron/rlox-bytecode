@@ -49,6 +49,10 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) {
         Op::GetUpValue(i) => byte_instruction("OP_GET_UPVALUE", *i),
         Op::SetUpValue(i) => byte_instruction("OP_SET_UPVALUE", *i),
         Op::CloseUpValue => println!("OP_CLOSE_VALUE"),
+        Op::Struct(i) => constant("OP_STRUCT", chunk, *i),
+        Op::GetProperty(i) => constant("OP_GET_PROPERTY", chunk, *i),
+        Op::SetProperty(i) => constant("OP_SET_PROPERTY", chunk, *i),
+        Op::Method(i) => constant("OP_METHOD", chunk, *i),
     }
 }
 

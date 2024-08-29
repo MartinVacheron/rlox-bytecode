@@ -214,3 +214,35 @@
 // main()
 // globalOne()
 // globalTwo()
+
+
+/// Structures
+// struct Pain {}
+// print Pain
+
+// struct Toast {}
+// var toast = Toast()
+// print toast.jam = "grape" // Prints "grape".
+
+// struct Pair {}
+
+// var pair = Pair()
+// pair.first = 1
+// pair.second = 2
+// print pair.first + pair.second // 3.
+
+
+/// Instances
+// struct Pain {}
+// print Pain()
+
+
+/// Bound method
+struct Scone {
+  fn topping(first, second) {
+    print "scone with " + first + " and " + second
+  }
+}
+
+var scone = Scone()
+scone.topping("berries", "cream")

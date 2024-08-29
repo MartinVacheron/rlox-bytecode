@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt::Display, ops::Range, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, fmt::Display, ops::Range, rc::Rc};
 use anyhow::{bail, Result};
 
 use Value::*;
@@ -15,6 +15,9 @@ pub enum Value {
     Fn(Rc<Function>),
     ClosureFn(Closure),
     NativeFn(NativeFunction),
+    Struct(StructId),
+    Instance(InstanceId),
+    BoundMethod(BoundMethod),
     Null,
 }
 
@@ -64,6 +67,8 @@ pub struct Closure {
     pub function: Rc<Function>,
      // Multiple closure can point to the same upvalue (non local ones)
     pub upvalues: Vec<Rc<RefCell<UpValue>>>,
+    pub structures: Vec<Struct>,
+    pub instances: Vec<Instance>,
 }
 
 impl Closure {
@@ -71,6 +76,8 @@ impl Closure {
         Self {
             function: function.clone(),
             upvalues: Vec::with_capacity(function.upvalues.len()),
+            structures: vec![],
+            instances: vec![],
         }
     }
 }
@@ -85,6 +92,56 @@ impl UpValue {
     pub fn new(location: usize) -> Self {
         Self { location, closed: None }
     }
+}
+
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct Struct {
+    pub name: String,
+    pub methods: HashMap<String, Value>,
+}
+
+impl Struct {
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            methods: HashMap::new(),
+        }
+    }
+}
+
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct StructId {
+    pub index: usize, // index in current frame's structures vec
+}
+
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Instance {
+    pub struct_id: usize,
+    pub fields: HashMap<String, Value>,
+}
+
+impl Instance {
+    pub fn new(struct_id: usize) -> Self {
+        Self {
+            struct_id,
+            fields: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct InstanceId {
+    pub index: usize, // index in current frame's instances vec
+}
+
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct BoundMethod {
+    pub receiver: Box<Value>,
+    pub method: Closure,
 }
 
 
@@ -172,8 +229,23 @@ impl Value {
 }
 
 impl Value {
-    pub fn new_closure(value: &Rc<Function>) -> Self {
-        Self::ClosureFn(Closure::from_fn(value))
+    pub fn new_struct_id(index: usize) -> Self {
+        Self::Struct(StructId {
+            index
+        })
+    }
+
+    pub fn new_instance_id(index: usize) -> Self {
+        Self::Instance(InstanceId {
+            index
+        })
+    }
+
+    pub fn new_bound_method(receiver: Value, method: &Closure) -> Self {
+        Self::BoundMethod(BoundMethod {
+            receiver: Box::new(receiver),
+            method: method.clone(),
+        })
     }
 }
 
@@ -196,6 +268,10 @@ impl Display for Value {
             Fn(v) => print_fn(v, f),
             NativeFn(_) => write!(f, "<native fn>"),
             ClosureFn(v) => print_fn(&v.function, f),
+            Struct(_) => write!(f, "<structure>"),
+            // Instance(v) => write!(f, "<instance of {}>", v.parent.name),
+            Instance(_) => write!(f, "<instance of >"),
+            BoundMethod(_) => write!(f, "<bound method>"),
         }
     }
 }

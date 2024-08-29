@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::chunk::Op;
 use crate::compiler::ByteCodeGen;
 use crate::debug::disassemble_instruction;
-use crate::value::{Closure, FnUpValue, NativeFunction, UpValue, Value};
+use crate::value::{Closure, FnUpValue, Instance, NativeFunction, Struct, UpValue, Value};
 
 use crate::native_fn::clock;
 
@@ -231,7 +231,8 @@ impl Vm {
                 Op::Call(args_count) => {
                     let callee = self.peek(args_count as usize).clone();
 
-                    if let Err(_) = self.call_value(callee, args_count) {
+                    if let Err(e) = self.call_value(callee, args_count) {
+                        eprintln!("{}", e.to_string());
                         return Err(VmErr::Runtime);
                     }
                 }
@@ -283,6 +284,74 @@ impl Vm {
                     self.close_upvalue(self.stack.len() - 1);
                     self.pop();
                 },
+                Op::Struct(idx) => {
+                    let name = if let Value::Str(s) = &self.frame().closure.function.chunk.constants[idx as usize] {
+                        s
+                    } else {
+                        self.runtime_err("Unable to find structure name");
+                        return Err(VmErr::Runtime);
+                    };
+
+                    let structure = Struct::new(name);
+                    let index = self.frame().closure.structures.len();
+                    self.frame_mut().closure.structures.push(structure);
+                    self.push(Value::new_struct_id(index));
+                },
+                Op::GetProperty(idx) => {
+                    let inst = if let Value::Instance(inst_id) = self.pop() {
+                        &self.frame().closure.instances[inst_id.index]
+                    } else {
+                        self.runtime_err("only instances have field");
+                        return Err(VmErr::Runtime);
+                    };
+
+                    let name = if let Value::Str(s) = &self.frame().closure.function.chunk.constants[idx as usize] {
+                        s.clone()
+                    } else {
+                        self.runtime_err("property access must be with identifer");
+                        return Err(VmErr::Runtime);
+                    };
+
+                    match inst.fields.get(&**name) {
+                        Some(value) => self.push(value.clone()),
+                        None => self.bind_method(inst.struct_id, &*name)?,
+                    }
+                },
+                Op::SetProperty(idx) => {
+                    let value = self.pop();
+                    let field_name = if let Value::Str(s) = &self.frame().closure.function.chunk.constants[idx as usize] {
+                        s.clone()
+                    } else {
+                        self.runtime_err("property access must be with identifer");
+                        return Err(VmErr::Runtime);
+                    };
+
+                    if let Value::Instance(inst_id) =  self.pop() {
+                        let inst = &mut self.frame_mut().closure.instances[inst_id.index];
+
+                        match inst.fields.insert(*field_name, value.clone()) {
+                            Some(_) => {},
+                            None => eprintln!("Instance dosen't have field"),
+                        }
+                    }
+
+                    // We put the assignement value back on top to return it as:
+                    //  print toast.jam = "grape" // Prints "grape".
+                    self.push(value);
+                },
+                Op::Method(idx) => {
+                    let name = if let Value::Str(s) = &self.frame().closure.function.chunk.constants[idx as usize] {
+                        s.clone()
+                    } else {
+                        self.runtime_err("method name must be an identifier");
+                        return Err(VmErr::Runtime);
+                    };
+
+                    if let Err(e) = self.define_method(&name) {
+                        eprintln!("{}", e.to_string());
+                        return Err(VmErr::Runtime);
+                    }
+                },
             }
         }
     }
@@ -304,6 +373,17 @@ impl Vm {
                 let res = f(args_count as usize, (self.stack.len() - 1) - args_count as usize);
                 self.stack.truncate(self.stack.len() - args_count as usize + 1);
                 self.push(res);
+            }
+            Value::Struct(struct_id) => {
+                let idx = self.frame().closure.instances.len();
+                let stack_len = self.stack.len();
+                let instance = Instance::new(struct_id.index);
+
+                self.frame_mut().closure.instances.push(instance);
+                self.stack[(stack_len - 1) - args_count as usize] = Value::new_instance_id(idx);
+            }
+            Value::BoundMethod(method) => {
+                return self.call(method.method, args_count)
             }
             _ => {
                 self.runtime_err("can only call functions and structures");
@@ -336,6 +416,41 @@ impl Vm {
         });
 
         Ok(())
+    }
+
+    fn define_method(&mut self, name: &str) -> VmRes {
+        let method = self.pop();
+
+        let idx = if let Value::Struct(struct_id) = self.peek(0) {
+            struct_id.index
+        } else {
+            self.runtime_err("can only call functions and structures");
+            return Err(VmErr::Runtime)
+        };
+
+        let structure = &mut self.frame_mut().closure.structures[idx];
+        structure.methods.insert(name.into(), method);
+        Ok(())
+    }
+
+    fn bind_method(&mut self, struct_id: usize, name: &String) -> Result<(), VmErr> {
+        let receiver = self.pop();
+        let structure = &self.frame().closure.structures[struct_id];
+
+        match structure.methods.get(name) {
+            Some(method) => {
+                if let Value::ClosureFn(closure) = method {
+                    let bound_method = Value::new_bound_method(receiver, closure);
+                    self.push(bound_method);
+
+                    return Ok(())
+                }
+            },
+            None => {}
+        }
+
+        self.runtime_err(&format!("instance dosen't have field {}", name));
+        Err(VmErr::Runtime)
     }
 
     fn capture_value(&mut self, index: usize) -> Rc<RefCell<UpValue>> {

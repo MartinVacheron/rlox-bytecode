@@ -34,7 +34,7 @@ pub(super) fn make_rules<'src>() -> Rules<'src> {
         Rule::new(None, None, P::None),                                            // LeftBrace
         Rule::new(None, None, P::None),                                            // RightBrace
         Rule::new(None, None, P::None),                                            // Comma
-        Rule::new(None, None, P::None),                                            // Dot
+        Rule::new(None, Some(ByteCodeGen::dot), P::Call),                          // Dot
         Rule::new(None, None, P::None),                                            // Colon
         Rule::new(Some(ByteCodeGen::unary), Some(ByteCodeGen::binary), P::Term),   // Minus
         Rule::new(None, Some(ByteCodeGen::binary), P::Term),                       // Plus

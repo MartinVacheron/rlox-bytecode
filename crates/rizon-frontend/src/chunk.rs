@@ -36,6 +36,10 @@ pub enum Op {
     GetUpValue(u8),
     SetUpValue(u8),
     CloseUpValue,
+    Struct(u8),
+    GetProperty(u8),
+    SetProperty(u8),
+    Method(u8),
 }
 
 #[derive(Default, Clone, Debug)]
