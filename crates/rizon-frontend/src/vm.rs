@@ -1,13 +1,12 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
-
 use thiserror::Error;
 
-use crate::chunk::Op;
+use crate::chunk::{Chunk, Op};
 use crate::compiler::ByteCodeGen;
-use crate::debug::disassemble_instruction;
-use crate::value::{Closure, FnUpValue, Instance, NativeFunction, Struct, UpValue, Value};
+use crate::debug::Disassembler;
+use crate::gc::{Gc, GcFormatter, GcRef};
+use crate::object::{BoundMethod, Closure, Instance, Iterator, Struct, UpValue};
+use crate::value::{NativeFunction, Value};
 
 use crate::native_fn::clock;
 
@@ -29,21 +28,21 @@ pub enum VmErr {
 
 pub type VmRes = Result<(), VmErr>;
 
-
 #[derive(Debug)]
 struct CallFrame {
-    closure: Closure,
+    closure: GcRef<Closure>,
     ip: usize,
     slots: usize,
 }
 
-#[derive(Default)]
 pub struct Vm {
     flags: VmFlags,
+    gc: Gc,
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
-    globals: HashMap<String, Value>,
-    open_upvalues: Vec<Rc<RefCell<UpValue>>>,
+    globals: HashMap<GcRef<String>, Value>,
+    open_upvalues: Vec<GcRef<UpValue>>,
+    init_string: GcRef<String>,
 }
 
 impl Vm {
@@ -51,11 +50,17 @@ impl Vm {
     const STACK_SIZE: usize = Self::FRAMES_MAX * u8::MAX as usize;
 
     pub fn new(flags: VmFlags) -> Self {
+        let mut gc = Gc::default();
+        let init_string = gc.intern("init".into());
+
         let mut vm = Self {
             flags,
+            gc,
             stack: Vec::with_capacity(Self::STACK_SIZE),
             frames: Vec::with_capacity(Self::FRAMES_MAX),
-            ..Default::default()
+            globals: HashMap::new(),
+            open_upvalues: vec![],
+            init_string,
         };
 
         vm.define_native("clock", clock);
@@ -63,17 +68,18 @@ impl Vm {
     }
 
     pub fn interpret(&mut self, code: &str) -> VmRes {
-        let mut bytecode_gen = ByteCodeGen::new(code, self.flags.disassemble_compiled);
+        let bytecode_gen = ByteCodeGen::new(code, &mut self.gc, self.flags.disassemble_compiled);
 
         let function = match bytecode_gen.compile() {
-            Ok(f) => Rc::new(f),
+            Ok(f) => f,
             Err(_) => return Err(VmErr::Compile),
         };
 
-        self.push(Value::Fn(function.clone()));
+        self.push(Value::Fn(function));
 
+        let closure = self.gc.alloc(Closure::from_fn(function));
         self.frames.push(CallFrame {
-            closure: Closure::from_fn(&function),
+            closure,
             ip: 0,
             slots: 0,
         });
@@ -84,17 +90,16 @@ impl Vm {
     fn run(&mut self) -> VmRes {
         loop {
             if self.flags.disassemble_instructions {
+                let disassembler = Disassembler::new(&self.gc, self.chunk(), Some(&self.stack));
+
                 if self.flags.print_stack {
-                    print!("          ");
-                    self.stack.iter().for_each(|v| print!("[ {} ] ", v));
-                    println!();
+                    disassembler.print_stack();
                 }
 
-                let frame = self.frame();
-                disassemble_instruction(&frame.closure.function.chunk, frame.ip);
+                disassembler.disassemble_instruction(self.frame().ip);
             }
 
-            let op = self.frame().closure.function.chunk.code[self.frame().ip];
+            let op = self.chunk().code[self.frame().ip];
             self.frame_mut().ip += 1;
 
             match op {
@@ -107,16 +112,16 @@ impl Vm {
 
                     if self.frames.is_empty() {
                         // Fictive 'main' function
-                        self.pop();
-                        return Ok(())
+                        // self.pop();
+                        return Ok(());
                     }
-                    
+
                     // Goes back to before fn call + args
                     self.stack.truncate(old.slots);
                     self.push(res);
-                },
+                }
                 Op::Constant(idx) => {
-                    let val = self.frame().closure.function.chunk.constants[idx as usize].clone();
+                    let val = self.chunk().constants[idx as usize].clone();
                     self.push(val);
                 }
                 Op::Negate => {
@@ -124,7 +129,28 @@ impl Vm {
                         self.runtime_err(&e.to_string())
                     }
                 }
-                Op::Add => self.binop(|a, b| a.add(b)),
+                Op::Add => {
+                    let (rhs, lhs) = (self.pop(), self.pop());
+
+                    let value = match (lhs, rhs) {
+                        (Value::Int(v1), Value::Int(v2)) => Value::Int(v1 + v2),
+                        (Value::Float(v1), Value::Float(v2)) => Value::Float(v1 + v2),
+                        (Value::Str(v1), Value::Str(v2)) => {
+                            let s1 = self.gc.deref(&v1);
+                            let s2 = self.gc.deref(&v2);
+                            let result = format!("{}{}", s1, s2);
+                            let result = self.gc.intern(result);
+                            Value::Str(result)
+                        }
+                        _ => {
+                            dbg!(lhs, rhs);
+                            self.runtime_err("Operation not allowed");
+                            return Err(VmErr::Runtime);
+                        }
+                    };
+
+                    self.push(value);
+                }
                 Op::Subtract => self.binop(|a, b| a.sub(b)),
                 Op::Multiply => self.binop(|a, b| a.mul(b)),
                 Op::Divide => self.binop(|a, b| a.div(b)),
@@ -139,56 +165,45 @@ impl Vm {
                 Op::Equal => self.binop(|a, b| a.eq(b)),
                 Op::Greater => self.binop(|a, b| a.gt(b)),
                 Op::Less => self.binop(|a, b| a.lt(b)),
-                Op::Print => println!("{}", self.pop()),
+                Op::Print => {
+                    let value = self.pop();
+                    println!("{}", GcFormatter::new(&value, &self.gc));
+                }
                 Op::Pop => {
                     self.pop();
                 }
-                Op::DefineGlobal(idx) => match &self.frame().closure.function.chunk.constants[idx as usize]
-                {
-                    Value::Str(s) => {
-                        let name = *s.clone();
-                        let value = self.pop();
-                        self.globals.insert(name, value);
-                    }
-                    _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL"),
-                },
-                Op::GetGlobal(idx) => match &self.frame().closure.function.chunk.constants[idx as usize] {
-                    Value::Str(s) => match self.globals.get(s.as_ref()) {
-                        Some(glob) => self.push(glob.clone()),
+                Op::DefineGlobal(idx) => {
+                    let name = self.chunk().read_string(idx);
+                    let value = self.pop();
+                    self.globals.insert(name, value);
+                }
+                Op::GetGlobal(idx) => {
+                    let name = self.chunk().read_string(idx);
+
+                    match self.globals.get(&name) {
+                        Some(&glob) => self.push(glob),
                         None => {
-                            self.runtime_err(&format!("Undefined variable '{}'", s));
+                            let name = self.gc.deref(&name);
+                            self.runtime_err(&format!("Undefined variable '{}'", name));
                             return Err(VmErr::Runtime);
                         }
-                    },
-                    _ => panic!("Internal error, using non-string operand to OP_DEFINE_GLOBAL"),
-                },
+                    }
+                }
                 Op::SetGlobal(idx) => {
-                    let name = {
-                        match &self.frame().closure.function.chunk.constants[idx as usize] {
-                            Value::Str(s) => *s.clone(),
-                            _ => panic!(
-                                "Internal error, using non-string operand to OP_DEFINE_GLOBAL"
-                            ),
-                        }
-                    };
+                    let name = self.chunk().read_string(idx);
 
-                    // FIXME: Check before inserting
-                    if self
-                        .globals
-                        .insert(name.clone(), self.peek(0).clone())
-                        .is_none()
-                    {
-                        self.runtime_err(&format!("Undefined variable '{}'", name));
+                    if self.globals.insert(name, self.peek(0)).is_none() {
+                        self.runtime_err(&format!("Undefined variable '{}'", self.gc.deref(&name)));
                         return Err(VmErr::Runtime);
                     }
                 }
                 Op::GetLocal(idx) => {
                     let offset = self.frame().slots;
-                    self.push(self.stack[idx as usize + offset].clone());
+                    self.push(self.stack[idx as usize + offset]);
                 }
                 Op::SetLocal(idx) => {
                     let offset = self.frame().slots;
-                    self.stack[idx as usize + offset] = self.peek(0).clone();
+                    self.stack[idx as usize + offset] = self.peek(0);
                 }
                 Op::JumpIfFalse(idx) => {
                     if let Value::Bool(b) = self.peek(0) {
@@ -203,7 +218,9 @@ impl Vm {
                     if let Value::Int(i) = self.pop() {
                         // The placeholder value (same as local idx)
                         self.push(Value::Int(0));
-                        self.push(Value::Iter(0..i));
+                        let iter = Iterator { range: 0..i };
+                        let iter = self.gc.alloc(iter);
+                        self.push(Value::Iter(iter));
                     } else {
                         self.runtime_err("Range must be an integer");
                         return Err(VmErr::Runtime);
@@ -211,9 +228,11 @@ impl Vm {
                 }
                 Op::ForIter(iter, idx) => {
                     let iter_idx = self.frame().slots + iter as usize;
-                    
-                    if let Value::Iter(iter) = &mut self.stack[iter_idx] {
-                        match iter.next() {
+
+                    if let Value::Iter(iter) = &self.stack[iter_idx] {
+                        let iter = self.gc.deref_mut(iter);
+
+                        match iter.range.next() {
                             Some(v) => {
                                 if let Value::Int(i) = &mut self.stack[iter_idx - 1] {
                                     *i = v;
@@ -222,14 +241,14 @@ impl Vm {
                                     return Err(VmErr::Runtime);
                                 }
                             }
-                            None => self.frame_mut().ip += idx as usize
+                            None => self.frame_mut().ip += idx as usize,
                         }
                     } else {
-                        panic!("failed to find iterator: {}", &self.stack[iter_idx])
+                        panic!("failed to find iterator")
                     }
                 }
                 Op::Call(args_count) => {
-                    let callee = self.peek(args_count as usize).clone();
+                    let callee = self.peek(args_count as usize);
 
                     if let Err(e) = self.call_value(callee, args_count) {
                         eprintln!("{}", e.to_string());
@@ -237,100 +256,90 @@ impl Vm {
                     }
                 }
                 Op::Closure(idx) => {
-                    let function = if let Value::Fn(f) = &self.frame().closure.function.chunk.constants[idx as usize] {
-                        Rc::clone(f)
+                    let function = self.chunk().read_constant(idx);
+
+                    if let Value::Fn(function) = function {
+                        let mut closure = Closure::from_fn(function);
+                        let upvalue_count = self.gc.deref(&function).upvalues.len();
+
+                        for i in 0..upvalue_count {
+                            let upvalue = self.gc.deref(&function).upvalues[i];
+
+                            let obj_upavlue = if upvalue.is_local {
+                                self.capture_value(self.frame().slots + upvalue.index as usize)
+                            } else {
+                                self.closure().upvalues[upvalue.index as usize]
+                            };
+
+                            closure.upvalues.push(obj_upavlue);
+                        }
+
+                        let closure = self.gc.alloc(closure);
+                        self.push(Value::Closure(closure));
                     } else {
                         panic!("closure instruction without function value")
-                    };
-
-                    let mut closure = Closure::from_fn(&function);
-
-                    for FnUpValue { index, is_local } in &function.upvalues {
-                        if *is_local {
-                            closure.upvalues.push(self.capture_value(self.frame().slots + *index as usize));
-                        } else {
-                            // OP_CLOSURE emitted at the end of fn declaration so we are in the surrounding one
-                            closure.upvalues.push(Rc::clone(&self.frame().closure.upvalues[*index as usize]));
-                        }
                     }
-
-                    self.push(Value::ClosureFn(closure));
-                },
+                }
                 Op::GetUpValue(idx) => {
-                    let val = {
-                        let upval = self.frame().closure.upvalues[idx as usize].borrow();
+                    let upvalue = self.closure().upvalues[idx as usize];
+                    let upvalue = self.gc.deref(&upvalue);
 
-                        match &upval.closed {
-                            Some(v) => v.clone(),
-                            None => self.stack[upval.location].clone(),
-                        }
+                    let val = match upvalue.closed {
+                        Some(v) => v,
+                        None => self.stack[upvalue.location],
                     };
 
                     self.push(val);
                 }
                 Op::SetUpValue(idx) => {
-                    let upval = Rc::clone(&self.frame().closure.upvalues[idx as usize]);
-                    let mut upval = upval.borrow_mut();
+                    let value = self.peek(0);
+                    let upvalue = self.closure().upvalues[idx as usize];
+                    let upvalue = self.gc.deref_mut(&upvalue);
 
-                    let val_assign = self.peek(0).clone();
-
-                    if upval.closed.is_none() {
-                        self.stack[upval.location] = val_assign;
+                    if upvalue.closed.is_none() {
+                        self.stack[upvalue.location] = value;
                     } else {
-                        upval.closed = Some(val_assign);
+                        upvalue.closed = Some(value);
                     }
-                },
+                }
                 Op::CloseUpValue => {
                     self.close_upvalue(self.stack.len() - 1);
                     self.pop();
-                },
+                }
                 Op::Struct(idx) => {
-                    let name = if let Value::Str(s) = &self.frame().closure.function.chunk.constants[idx as usize] {
-                        s
-                    } else {
-                        self.runtime_err("Unable to find structure name");
-                        return Err(VmErr::Runtime);
-                    };
-
+                    let name = self.chunk().read_string(idx);
                     let structure = Struct::new(name);
-                    let index = self.frame().closure.structures.len();
-                    self.frame_mut().closure.structures.push(structure);
-                    self.push(Value::new_struct_id(index));
-                },
+                    let structure = self.gc.alloc(structure);
+                    self.push(Value::Struct(structure));
+                }
+                // NOTE: Field shadowing methods, do we want that?
                 Op::GetProperty(idx) => {
-                    let inst = if let Value::Instance(inst_id) = self.pop() {
-                        &self.frame().closure.instances[inst_id.index]
+                    if let Value::Instance(inst) = self.peek(0) {
+                        let inst = self.gc.deref(&inst);
+                        let property_name = self.chunk().read_string(idx);
+                        
+                        match inst.fields.get(&property_name) {
+                            Some(&value) => {
+                                self.pop();
+                                self.push(value);
+                            }
+                            None => self.bind_method(inst.parent, property_name)?,
+                        }
                     } else {
                         self.runtime_err("only instances have field");
                         return Err(VmErr::Runtime);
                     };
-
-                    let name = if let Value::Str(s) = &self.frame().closure.function.chunk.constants[idx as usize] {
-                        s.clone()
-                    } else {
-                        self.runtime_err("property access must be with identifer");
-                        return Err(VmErr::Runtime);
-                    };
-
-                    match inst.fields.get(&**name) {
-                        Some(value) => self.push(value.clone()),
-                        None => self.bind_method(inst.struct_id, &*name)?,
-                    }
-                },
+                }
                 Op::SetProperty(idx) => {
+                    //foo.bar = 4 -> stack: foo, bar, 4
                     let value = self.pop();
-                    let field_name = if let Value::Str(s) = &self.frame().closure.function.chunk.constants[idx as usize] {
-                        s.clone()
-                    } else {
-                        self.runtime_err("property access must be with identifer");
-                        return Err(VmErr::Runtime);
-                    };
+                    let field_name = self.chunk().read_string(idx);
 
-                    if let Value::Instance(inst_id) =  self.pop() {
-                        let inst = &mut self.frame_mut().closure.instances[inst_id.index];
+                    if let Value::Instance(inst) = self.pop() {
+                        let inst = self.gc.deref_mut(&inst);
 
-                        match inst.fields.insert(*field_name, value.clone()) {
-                            Some(_) => {},
+                        match inst.fields.insert(field_name, value) {
+                            Some(_) => {}
                             None => eprintln!("Instance dosen't have field"),
                         }
                     }
@@ -338,20 +347,15 @@ impl Vm {
                     // We put the assignement value back on top to return it as:
                     //  print toast.jam = "grape" // Prints "grape".
                     self.push(value);
-                },
+                }
                 Op::Method(idx) => {
-                    let name = if let Value::Str(s) = &self.frame().closure.function.chunk.constants[idx as usize] {
-                        s.clone()
-                    } else {
-                        self.runtime_err("method name must be an identifier");
-                        return Err(VmErr::Runtime);
-                    };
+                    let method_name = self.chunk().read_string(idx);
 
-                    if let Err(e) = self.define_method(&name) {
+                    if let Err(e) = self.define_method(method_name) {
                         eprintln!("{}", e.to_string());
                         return Err(VmErr::Runtime);
                     }
-                },
+                }
             }
         }
     }
@@ -368,49 +372,65 @@ impl Vm {
 
     fn call_value(&mut self, callee: Value, args_count: u8) -> VmRes {
         match callee {
-            Value::ClosureFn(f) => return self.call(f, args_count),
+            Value::Closure(f) => self.call(f, args_count)?,
             Value::NativeFn(f) => {
-                let res = f(args_count as usize, (self.stack.len() - 1) - args_count as usize);
-                self.stack.truncate(self.stack.len() - args_count as usize + 1);
+                let res = f(
+                    args_count as usize,
+                    (self.stack.len() - 1) - args_count as usize,
+                );
+                self.stack
+                    .truncate(self.stack.len() - args_count as usize + 1);
                 self.push(res);
             }
-            Value::Struct(struct_id) => {
-                let idx = self.frame().closure.instances.len();
-                let stack_len = self.stack.len();
-                let instance = Instance::new(struct_id.index);
+            Value::Struct(struct_ref) => {
+                let instance = Instance::new(struct_ref);
+                let instance = self.gc.alloc(instance);
+                self.set_at(Value::Instance(instance), args_count);
+                let parent = self.gc.deref(&struct_ref);
 
-                self.frame_mut().closure.instances.push(instance);
-                self.stack[(stack_len - 1) - args_count as usize] = Value::new_instance_id(idx);
+                if let Some(&Value::Closure(initializer)) = parent.methods.get(&self.init_string) {
+                    self.call(initializer, args_count)?;
+                } else if args_count != 0 {
+                    self.runtime_err(&format!("expected 0 argument but got {}", args_count));
+                    return Err(VmErr::Runtime);
+                }
             }
-            Value::BoundMethod(method) => {
-                return self.call(method.method, args_count)
+            Value::BoundMethod(bound) => {
+                let bound = self.gc.deref(&bound);
+                let method = bound.method;
+                let receiver = bound.receiver;
+                self.set_at(receiver, args_count);
+                self.call(method, args_count)?;
             }
             _ => {
                 self.runtime_err("can only call functions and structures");
-                return Err(VmErr::Runtime)
+                return Err(VmErr::Runtime);
             }
         }
 
         Ok(())
     }
 
-    fn call(&mut self, closure: Closure, args_count: u8) -> VmRes {
+    fn call(&mut self, closure_ref: GcRef<Closure>, args_count: u8) -> VmRes {
+        let closure = self.gc.deref(&closure_ref);
+        let function = self.gc.deref(&closure.function);
+
         if self.frames.len() == Self::FRAMES_MAX {
             self.runtime_err("stack overflow");
-            return Err(VmErr::Runtime)
+            return Err(VmErr::Runtime);
         }
 
-        if closure.function.arity != args_count as usize {
+        if function.arity != args_count as usize {
             self.runtime_err(&format!(
                 "expected {} arguments but got {}",
-                closure.function.arity, args_count
+                function.arity, args_count
             ));
 
-            return Err(VmErr::Runtime)
+            return Err(VmErr::Runtime);
         }
 
         self.frames.push(CallFrame {
-            closure,
+            closure: closure_ref,
             ip: 0,
             slots: self.stack.len() - args_count as usize - 1, // -1 to get the fn call
         });
@@ -418,56 +438,61 @@ impl Vm {
         Ok(())
     }
 
-    fn define_method(&mut self, name: &str) -> VmRes {
+    fn define_method(&mut self, name: GcRef<String>) -> VmRes {
         let method = self.pop();
 
-        let idx = if let Value::Struct(struct_id) = self.peek(0) {
-            struct_id.index
+        if let Value::Struct(structure) = self.peek(0) {
+            let structure = self.gc.deref_mut(&structure);
+            structure.methods.insert(name, method);
+
+            Ok(())
         } else {
             self.runtime_err("can only call functions and structures");
-            return Err(VmErr::Runtime)
-        };
-
-        let structure = &mut self.frame_mut().closure.structures[idx];
-        structure.methods.insert(name.into(), method);
-        Ok(())
-    }
-
-    fn bind_method(&mut self, struct_id: usize, name: &String) -> Result<(), VmErr> {
-        let receiver = self.pop();
-        let structure = &self.frame().closure.structures[struct_id];
-
-        match structure.methods.get(name) {
-            Some(method) => {
-                if let Value::ClosureFn(closure) = method {
-                    let bound_method = Value::new_bound_method(receiver, closure);
-                    self.push(bound_method);
-
-                    return Ok(())
-                }
-            },
-            None => {}
+            Err(VmErr::Runtime)
         }
-
-        self.runtime_err(&format!("instance dosen't have field {}", name));
-        Err(VmErr::Runtime)
     }
 
-    fn capture_value(&mut self, index: usize) -> Rc<RefCell<UpValue>> {
+    fn bind_method(&mut self, parent: GcRef<Struct>, name: GcRef<String>) -> Result<(), VmErr> {
+        let structure = self.gc.deref(&parent);
+        if let Some(method) = structure.methods.get(&name) {
+            let receiver = self.peek(0);
+
+            let method = match method {
+                Value::Closure(closure) => *closure,
+                _ => panic!("inconsitent state, method is not a closure"),
+            };
+            let bound = BoundMethod::new(receiver, method);
+            let bound = self.gc.alloc(bound);
+            self.pop();
+            self.push(Value::BoundMethod(bound));
+            Ok(())
+        } else {
+            self.runtime_err(&format!(
+                "instance dosen't have field {}",
+                self.gc.deref(&name)
+            ));
+            Err(VmErr::Runtime)
+        }
+    }
+
+    fn capture_value(&mut self, index: usize) -> GcRef<UpValue> {
         // Ensure only one UpValue pointing to a slot
-        for upval in self.open_upvalues.iter().rev() {
-            if upval.borrow().location < index {
-                break
+        for upvalue_ref in self.open_upvalues.iter().rev() {
+            let upvalue = self.gc.deref(upvalue_ref);
+
+            if upvalue.location < index {
+                break;
             }
-            
-            if upval.borrow().location == index {
-                return Rc::clone(upval)
+
+            if upvalue.location == index {
+                return *upvalue_ref;
             }
         }
 
-        let new_upval = Rc::new(RefCell::new(UpValue::new(index)));
-        self.open_upvalues.push(Rc::clone(&new_upval));
-        new_upval
+        let upvalue = UpValue::new(index);
+        let upvalue = self.gc.alloc(upvalue);
+        self.open_upvalues.push(upvalue);
+        upvalue
     }
 
     // Close all upvalues that point to slot above it in the stack
@@ -476,16 +501,17 @@ impl Vm {
 
         loop {
             if i < 1 {
-                break
+                break;
             }
 
-            let mut upval = self.open_upvalues[i - 1].borrow_mut();
+            let upvalue_ref = self.open_upvalues[i - 1];
+            let upvalue = self.gc.deref_mut(&upvalue_ref);
 
-            if upval.location < last {
-                break
+            if upvalue.location < last {
+                break;
             }
 
-            upval.closed = Some(self.stack[upval.location].clone());
+            upvalue.closed = Some(self.stack[upvalue.location]);
 
             i -= 1;
         }
@@ -494,7 +520,8 @@ impl Vm {
     }
 
     fn define_native(&mut self, name: &str, function: NativeFunction) {
-        self.globals.insert(name.into(), Value::NativeFn(function));
+        let name = self.gc.intern(name.into());
+        self.globals.insert(name, Value::NativeFn(function));
     }
 
     fn pop(&mut self) -> Value {
@@ -505,7 +532,6 @@ impl Vm {
         self.stack.push(value);
     }
 
-    // PERF: Use [len() -1] to avoid unwraping for performance
     fn frame(&self) -> &CallFrame {
         self.frames.last().unwrap()
     }
@@ -514,9 +540,16 @@ impl Vm {
         self.frames.last_mut().unwrap()
     }
 
-    // PERF: Cache stack.len()?
-    fn peek(&self, distance: usize) -> &Value {
-        &self.stack[self.stack.len() - distance - 1]
+    fn chunk(&self) -> &Chunk {
+        &self.gc.deref(&self.closure().function).chunk
+    }
+
+    fn closure(&self) -> &Closure {
+        self.gc.deref(&self.frame().closure)
+    }
+
+    fn peek(&self, distance: usize) -> Value {
+        self.stack[self.stack.len() - distance - 1]
     }
 
     fn peek_mut(&mut self, distance: usize) -> &mut Value {
@@ -524,23 +557,29 @@ impl Vm {
         &mut self.stack[idx]
     }
 
+    fn set_at(&mut self, value: Value, offset: u8) {
+        let index = self.stack.len() - offset as usize - 1;
+        self.stack[index] = value;
+    }
+
     fn runtime_err(&self, msg: &str) {
         eprintln!(
             "[line {}] Error: {}",
-            self.frame().closure.function.chunk.lines[self.frame().closure.function.chunk.code.len() - 1] + 1,
+            self.chunk().lines[self.chunk().code.len() - 1] + 1,
             msg
         );
 
         for frame in self.frames.iter().rev() {
-            eprint!(
-                "[line {}] in ",
-                frame.closure.function.chunk.lines[frame.ip] + 1,
-            );
+            let closure = self.gc.deref(&frame.closure);
+            let function = self.gc.deref(&closure.function);
+            let name = self.gc.deref(&function.name);
 
-            if frame.closure.function.name.is_empty() {
+            eprint!("[line {}] in ", function.chunk.lines[frame.ip] + 1,);
+
+            if name.is_empty() {
                 eprintln!("script");
             } else {
-                eprintln!("{}()", frame.closure.function.name);
+                eprintln!("{}()", name);
             }
         }
     }

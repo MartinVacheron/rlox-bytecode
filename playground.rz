@@ -206,8 +206,6 @@
 //         else {
 //             globalTwo = closure
 //         }
-
-//         print a
 //     }
 // }
 
@@ -238,11 +236,32 @@
 
 
 /// Bound method
-struct Scone {
-  fn topping(first, second) {
-    print "scone with " + first + " and " + second
+// struct Scone {
+//   fn init() {}
+
+//   fn topping(first, second) {
+//     print "scone with " + first + " and " + second
+//   }
+// }
+
+// var scone = Scone()
+// scone.topping("berries", "cream")
+
+
+/// Self
+struct CoffeeMaker {
+  fn init(coffee) {
+    self.coffee = coffee
+  }
+
+  fn brew() {
+    print "Enjoy your cup of " + self.coffee
+
+    // No reusing the grounds!
+    self.coffee = null
   }
 }
 
-var scone = Scone()
-scone.topping("berries", "cream")
+var maker = CoffeeMaker("coffee and chicory")
+print maker.coffee
+maker.brew()

@@ -1,10 +1,7 @@
 use anyhow::{bail, Result};
 
 use crate::{
-    chunk::{Chunk, Op},
-    debug::disassemble,
-    lexer::{Lexer, Token, TokenKind},
-    value::Function,
+    chunk::{Chunk, Op}, debug::Disassembler, gc::{Gc, GcRef}, lexer::{Lexer, Token, TokenKind}, object::Function
 };
 
 mod backend;
@@ -75,7 +72,10 @@ enum FnType {
     #[default]
     Script,
     Function,
+    Method,
+    Initializer,
 }
+
 
 struct Compiler<'src> {
     function: Function,
@@ -87,15 +87,18 @@ struct Compiler<'src> {
 impl<'src> Compiler<'src> {
     const LOCAL_COUNT: usize = u8::MAX as usize + 1;
 
-    pub fn new(fn_type: FnType) -> Box<Self> {
+    pub fn new(function_name: GcRef<String>, fn_type: FnType) -> Box<Self> {
         let mut scope = Scope::default();
-        scope.locals.push(Local { name: "", depth: 0, is_captured: false });
+
+        let first_slot = if fn_type == FnType::Function { "" } else { "self" };
+        // For "self"
+        scope.locals.push(Local { name: first_slot, depth: 0, is_captured: false });
 
         Box::new(Self {
             fn_type,
             scope,
             enclosing: None,
-            function: Function::default(),
+            function: Function::new(function_name),
         })
     }
 
@@ -149,34 +152,51 @@ impl<'src> Compiler<'src> {
 }
 
 
+#[derive(Debug)]
+struct StructCompiler {
+    enclosing: Option<Box<StructCompiler>>,
+}
+
+impl StructCompiler {
+    pub fn new(enclosing: Option<Box<StructCompiler>>) -> Box<Self> {
+        Box::new(Self { enclosing })
+    }
+}
+
 pub struct ByteCodeGen<'src> {
-    debug: bool,
     // Frontend
     lexer: Lexer<'src>,
     current: Token<'src>,
     previous: Token<'src>,
     had_error: bool,
     panic_mode: bool,
+    debug: bool,
     // Backend
     rules: Rules<'src>,
     compiler: Box<Compiler<'src>>,
+    gc: &'src mut Gc,
+    current_struct: Option<Box<StructCompiler>>,
 }
 
 impl<'src> ByteCodeGen<'src> {
-    pub fn new(code: &'src str, debug: bool) -> Self {
+    pub fn new(code: &'src str, gc: &'src mut Gc, debug: bool) -> Self {
+        let name = gc.intern("script".into());
+
         Self {
-            debug,
             lexer: Lexer::new(code),
             current: Token::default(),
             previous: Token::default(),
             had_error: false,
             panic_mode: false,
+            debug,
             rules: make_rules(),
-            compiler: Compiler::new(FnType::Script),
+            compiler: Compiler::new(name, FnType::Script),
+            gc,
+            current_struct: None,
         }
     }
 
-    pub fn compile(&mut self) -> Result<Function> {
+    pub fn compile(mut self) -> Result<GcRef<Function>> {
         self.advance();
 
         while !self.is_at(TokenKind::Eof) {
@@ -186,17 +206,16 @@ impl<'src> ByteCodeGen<'src> {
         }
 
         self.expect(TokenKind::Eof, "");
-
         self.emit_return();
+
+        if self.debug {
+            self.dis_compiler();
+        }
 
         if self.had_error {
             bail!("Compile error")
         } else {
-            if self.debug {
-                self.dis_compiler();
-            }
-
-            Ok(self.end_compiler())
+            Ok(self.gc.alloc(self.compiler.function))
         }
     }
 
@@ -250,9 +269,9 @@ impl<'src> ByteCodeGen<'src> {
     }
 
     fn push_compiler(&mut self, fn_type: FnType) {
-        let old = std::mem::replace(&mut self.compiler, Compiler::new(fn_type));
+        let name = self.gc.intern(self.previous.lexeme.to_string());
+        let old = std::mem::replace(&mut self.compiler, Compiler::new(name, fn_type));
         self.compiler.enclosing = Some(old);
-        self.compiler.function.name = self.previous.lexeme.to_string();
     }
 
     fn pop_compiler(&mut self) -> Function {
@@ -262,7 +281,7 @@ impl<'src> ByteCodeGen<'src> {
         if self.debug {
             self.dis_compiler();
         }
-
+        
         match self.compiler.enclosing.take() {
             Some(enclosing) => {
                 let old = std::mem::replace(&mut self.compiler, enclosing);
@@ -272,17 +291,17 @@ impl<'src> ByteCodeGen<'src> {
         }
     }
 
-    fn end_compiler(&mut self) -> Function {
-        std::mem::take(&mut self.compiler.function)
-    }
-
     fn dis_compiler(&self) {
-        let name = if self.compiler.function.name.is_empty() {
+        let name = self.gc.deref(&self.compiler.function.name);
+        let name = if name.is_empty() {
             "<script>"
         } else {
-            &self.compiler.function.name
+            name
         };
 
-        disassemble(self.chunk(), name);
+        let disassembler = Disassembler::new(&self.gc, &self.compiler.function.chunk, None);
+
+        disassembler.disassemble(name);
+        println!();
     }
 }

@@ -1,6 +1,6 @@
 use crate::{chunk::Op, lexer::TokenKind, value::Value};
 
-use super::{rules::Rule, ByteCodeGen, FnType, Precedence};
+use super::{rules::Rule, ByteCodeGen, FnType, Precedence, StructCompiler};
 
 use Precedence as P;
 
@@ -70,7 +70,8 @@ impl<'src> ByteCodeGen<'src> {
     }
 
     fn identifier_constant(&mut self) -> u8 {
-        let name = Value::Str(Box::new(self.previous.lexeme.to_string()));
+        let name = self.gc.intern(self.previous.lexeme.to_string());
+        let name = Value::Str(name);
         self.make_constant(name)
     }
 
@@ -112,15 +113,16 @@ impl<'src> ByteCodeGen<'src> {
                 }
             }
 
-            self.expect(TokenKind::RightParen, "expected ')' after function parameters");
+            self.expect_and_skip(TokenKind::RightParen, "expected ')' after function parameters");
         }
 
-        self.expect(TokenKind::LeftBrace, "expected '{' before function body");
+        self.expect_and_skip(TokenKind::LeftBrace, "expected '{' before function body");
 
         self.block();
 
         let function = self.pop_compiler();
-        let idx = self.make_constant(function.into());
+        let function = self.gc.alloc(function);
+        let idx = self.make_constant(Value::Fn(function));
         self.emit_byte_prev_line(Op::Closure(idx));
     }
 
@@ -128,6 +130,9 @@ impl<'src> ByteCodeGen<'src> {
         self.expect_and_skip(TokenKind::Identifier, "expect structure name after 'struct' keyword");
         let name_idx = self.identifier_constant();
         self.declare_variable();
+
+        let old = self.current_struct.take();
+        self.current_struct = Some(StructCompiler::new(old));
 
         self.emit_byte(Op::Struct(name_idx));
         // Make it available for self reference in its body
@@ -147,16 +152,26 @@ impl<'src> ByteCodeGen<'src> {
             }
         }
 
-        // Pop the structure variable
-        // self.emit_byte(Op::Pop);
-
+        match self.current_struct.take() {
+            Some(cur) => self.current_struct = cur.enclosing,
+            None =>  self.current_struct = None
+        }
+        
         self.expect_and_skip(TokenKind::RightBrace, "expected '}' after structure body");
+        self.emit_byte_prev_line(Op::Pop);
     }
 
     fn method(&mut self) {
         self.expect_and_skip(TokenKind::Identifier, "expect method name");
         let name_idx = self.identifier_constant();
-        self.function(FnType::Function);
+
+        let fn_type = if self.previous.lexeme == "init" {
+            FnType::Initializer
+        } else {
+            FnType::Method
+        };
+
+        self.function(fn_type);
         self.emit_byte(Op::Method(name_idx));
     }
 
@@ -204,6 +219,10 @@ impl<'src> ByteCodeGen<'src> {
         if self.is_at(TokenKind::NewLine) {
             self.emit_return();
         } else {
+            if self.compiler.fn_type == FnType::Initializer {
+                self.error("can't return a value from a constructor");
+            }
+
             self.expression();
             self.emit_byte(Op::Return);
         }
@@ -446,11 +465,21 @@ impl<'src> ByteCodeGen<'src> {
     pub(super) fn string(&mut self, _: bool) {
         let str_len = self.previous.lexeme.len();
         let final_str = self.previous.lexeme[1..str_len-1].to_string();
-        self.emit_constant(Value::Str(Box::new(final_str)));
+        let string = self.gc.intern(final_str);
+        self.emit_constant(Value::Str(string));
     }
 
     pub(super) fn variable(&mut self, can_assign: bool) {
         self.named_variable(can_assign);
+    }
+
+    pub(super) fn self_(&mut self, _: bool) {
+        if self.current_struct.is_none() {
+            self.error("can't use 'self' outside of a structure");
+            return
+        }
+
+        self.variable(false);
     }
 
     fn named_variable(&mut self, can_assign: bool) {
@@ -522,7 +551,13 @@ impl<'src> ByteCodeGen<'src> {
     }
 
     pub(super) fn emit_return(&mut self) {
-        self.emit_byte(Op::Null);
+        if self.compiler.fn_type == FnType::Initializer {
+            // Slot 0 contains the 'self' variable
+            self.emit_byte(Op::GetLocal(0));
+        } else {
+            self.emit_byte(Op::Null);
+        }
+
         self.emit_byte(Op::Return);
     }
 

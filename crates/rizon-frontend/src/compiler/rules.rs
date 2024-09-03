@@ -54,7 +54,7 @@ pub(super) fn make_rules<'src>() -> Rules<'src> {
         Rule::new(Some(ByteCodeGen::float), None, P::None),                        // Float
         Rule::new(None, None, P::None),                                            // Struct
         Rule::new(None, None, P::None),                                            // Fn
-        Rule::new(None, None, P::None),                                            // SelfKw
+        Rule::new(Some(ByteCodeGen::self_), None, P::None),                        // SelfKw
         Rule::new(None, None, P::None),                                            // Var
         Rule::new(None, None, P::None),                                            // Return
         Rule::new(None, None, P::None),                                            // If

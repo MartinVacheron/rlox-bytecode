@@ -1,5 +1,5 @@
 // use num_enum::{IntoPrimitive, TryFromPrimitive};
-use crate::value::Value;
+use crate::{gc::GcRef, value::Value};
 
 // #[derive(IntoPrimitive, TryFromPrimitive)]
 #[derive(Copy, Clone, Debug)]
@@ -60,5 +60,17 @@ impl Chunk {
         self.constants.push(value);
 
         self.constants.len() - 1
+    }
+
+    pub fn read_constant(&self, index: u8) -> Value {
+        self.constants[index as usize]
+    }
+
+    pub fn read_string(&self, index: u8) -> GcRef<String> {
+        if let Value::Str(string) = self.read_constant(index) {
+            string
+        } else {
+            panic!("constant is not a string")
+        }
     }
 }
