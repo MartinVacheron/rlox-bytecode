@@ -1,10 +1,11 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
 use thiserror::Error;
 
 use crate::chunk::{Chunk, Op};
 use crate::compiler::ByteCodeGen;
 use crate::debug::Disassembler;
-use crate::gc::{Gc, GcFormatter, GcRef};
+use crate::gc::{Gc, GcFormatter, GcRef, GcTrace};
 use crate::object::{BoundMethod, Closure, Instance, Iterator, Struct, UpValue};
 use crate::value::{NativeFunction, Value};
 
@@ -15,6 +16,8 @@ pub struct VmFlags {
     pub disassemble_compiled: bool,
     pub disassemble_instructions: bool,
     pub print_stack: bool,
+    pub verbose_gc: bool,
+    pub stress_gc: bool,
 }
 
 #[derive(Error, Debug)]
@@ -50,7 +53,7 @@ impl Vm {
     const STACK_SIZE: usize = Self::FRAMES_MAX * u8::MAX as usize;
 
     pub fn new(flags: VmFlags) -> Self {
-        let mut gc = Gc::default();
+        let mut gc = Gc::new(flags.verbose_gc);
         let init_string = gc.intern("init".into());
 
         let mut vm = Self {
@@ -77,7 +80,7 @@ impl Vm {
 
         self.push(Value::Fn(function));
 
-        let closure = self.gc.alloc(Closure::from_fn(function));
+        let closure = self.alloc(Closure::from_fn(function));
         self.frames.push(CallFrame {
             closure,
             ip: 0,
@@ -139,7 +142,7 @@ impl Vm {
                             let s1 = self.gc.deref(&v1);
                             let s2 = self.gc.deref(&v2);
                             let result = format!("{}{}", s1, s2);
-                            let result = self.gc.intern(result);
+                            let result = self.intern(result);
                             Value::Str(result)
                         }
                         _ => {
@@ -219,7 +222,7 @@ impl Vm {
                         // The placeholder value (same as local idx)
                         self.push(Value::Int(0));
                         let iter = Iterator { range: 0..i };
-                        let iter = self.gc.alloc(iter);
+                        let iter = self.alloc(iter);
                         self.push(Value::Iter(iter));
                     } else {
                         self.runtime_err("Range must be an integer");
@@ -274,7 +277,7 @@ impl Vm {
                             closure.upvalues.push(obj_upavlue);
                         }
 
-                        let closure = self.gc.alloc(closure);
+                        let closure = self.alloc(closure);
                         self.push(Value::Closure(closure));
                     } else {
                         panic!("closure instruction without function value")
@@ -309,7 +312,7 @@ impl Vm {
                 Op::Struct(idx) => {
                     let name = self.chunk().read_string(idx);
                     let structure = Struct::new(name);
-                    let structure = self.gc.alloc(structure);
+                    let structure = self.alloc(structure);
                     self.push(Value::Struct(structure));
                 }
                 // NOTE: Field shadowing methods, do we want that?
@@ -388,7 +391,7 @@ impl Vm {
             }
             Value::Struct(struct_ref) => {
                 let instance = Instance::new(struct_ref);
-                let instance = self.gc.alloc(instance);
+                let instance = self.alloc(instance);
                 self.set_at(Value::Instance(instance), args_count);
                 let structure = self.gc.deref(&struct_ref);
 
@@ -469,7 +472,7 @@ impl Vm {
                 _ => panic!("inconsitent state, method is not a closure"),
             };
             let bound = BoundMethod::new(receiver, method);
-            let bound = self.gc.alloc(bound);
+            let bound = self.alloc(bound);
             self.pop();
             self.push(Value::BoundMethod(bound));
             Ok(())
@@ -497,7 +500,7 @@ impl Vm {
         }
 
         let upvalue = UpValue::new(index);
-        let upvalue = self.gc.alloc(upvalue);
+        let upvalue = self.alloc(upvalue);
         self.open_upvalues.push(upvalue);
         upvalue
     }
@@ -562,8 +565,50 @@ impl Vm {
     }
 
     fn define_native(&mut self, name: &str, function: NativeFunction) {
-        let name = self.gc.intern(name.into());
+        let name = self.intern(name.into());
         self.globals.insert(name, Value::NativeFn(function));
+    }
+
+    fn alloc<T: GcTrace + 'static + Debug>(&mut self, object: T) -> GcRef<T> {
+        self.mark_and_sweep();
+        self.gc.alloc(object)
+    }
+
+    fn intern(&mut self, name: String) -> GcRef<String> {
+        self.mark_and_sweep();
+        self.gc.intern(name)
+    }
+
+    fn mark_and_sweep(&mut self) {
+        if self.flags.stress_gc || self.gc.should_gc() {
+            if self.flags.verbose_gc {
+                println!("-- GC begin");
+            }
+
+            self.mark_roots();
+            self.gc.collect_garbage();
+
+            if self.flags.verbose_gc {
+                println!("-- GC end");
+            }
+        }
+    }
+
+    fn mark_roots(&mut self) {
+        for &value in &self.stack {
+            self.gc.mark_value(value);
+        }
+
+        for frame in &self.frames {
+            self.gc.mark_object(frame.closure)
+        }
+
+        for &upvalue in &self.open_upvalues {
+            self.gc.mark_object(upvalue);
+        }
+
+        self.gc.mark_table(&self.globals);
+        self.gc.mark_object(self.init_string);
     }
 
     fn pop(&mut self) -> Value {

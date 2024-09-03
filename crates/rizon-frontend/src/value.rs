@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use Value::*;
 
-use crate::{gc::{GcRef, GcTrace}, object::{BoundMethod, Closure, Function, Instance, Iterator, Struct}};
+use crate::{gc::{Gc, GcRef, GcTrace}, object::{BoundMethod, Closure, Function, Instance, Iterator, Struct}};
 
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -113,6 +113,22 @@ impl GcTrace for Value {
             Instance(v) => gc.deref(v).format(f, gc),
             BoundMethod(v) => gc.deref(v).format(f, gc),
         }
+    }
+
+    fn trace(&self, gc: &mut Gc) {
+        match self {
+            Value::BoundMethod(v) => gc.mark_object(*v),
+            Value::Struct(v) => gc.mark_object(*v),
+            Value::Closure(v) => gc.mark_object(*v),
+            Value::Fn(v) => gc.mark_object(*v),
+            Value::Instance(v) => gc.mark_object(*v),
+            Value::Str(v) => gc.mark_object(*v),
+            _ => (),
+        }
+    }
+
+    fn size(&self) -> usize {
+        0
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

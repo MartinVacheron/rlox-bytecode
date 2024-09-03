@@ -33,6 +33,14 @@ struct Cli {
     #[arg(short, long)]
     /// Print stack at each instruction
     stack: bool,
+
+    #[arg(long)]
+    /// Print GC actions
+    verbose_gc: bool,
+
+    #[arg(long)]
+    /// Calls the GC on each allocation
+    stress_gc: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -42,6 +50,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         disassemble_compiled: cli.dis_code,
         disassemble_instructions: cli.instr,
         print_stack: cli.stack,
+        verbose_gc: cli.verbose_gc,
+        stress_gc: cli.stress_gc,
     };
 
     if let Some(f) = cli.file {
