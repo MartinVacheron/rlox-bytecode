@@ -40,6 +40,7 @@ pub enum Op {
     GetProperty(u8),
     SetProperty(u8),
     Method(u8),
+    Invoke((u8, u8)),
 }
 
 #[derive(Default, Clone, Debug)]

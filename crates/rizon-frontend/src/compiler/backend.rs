@@ -293,8 +293,6 @@ impl<'src> ByteCodeGen<'src> {
         let loop_start = self.chunk_last_idx();
         let exit_jump = self.emit_jump(Op::ForIter(iter_idx as u8, 0xffff));
 
-        // self.expect_and_skip(TokenKind::LeftBrace, "expect '{' before 'while' body");
-        // self.block();
         // The fact of doing a scope with statement allow to clean the whole loop before
         // starting the next round.
         self.statement();
@@ -408,13 +406,16 @@ impl<'src> ByteCodeGen<'src> {
 
     pub(super) fn dot(&mut self, can_assign: bool) {
         self.expect(TokenKind::Identifier, "expect property name after '.'");
-        let idx = self.identifier_constant();
+        let name_idx = self.identifier_constant();
 
         if can_assign && self.is_at(TokenKind::Equal) {
             self.expression();
-            self.emit_byte(Op::SetProperty(idx));
+            self.emit_byte(Op::SetProperty(name_idx));
+        } else if self.is_at(TokenKind::LeftParen) {
+            let args_count = self.args_list();
+            self.emit_byte(Op::Invoke((name_idx, args_count as u8)));
         } else {
-            self.emit_byte(Op::GetProperty(idx));
+            self.emit_byte(Op::GetProperty(name_idx));
         }
     }
 

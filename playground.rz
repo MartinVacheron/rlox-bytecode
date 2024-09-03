@@ -123,17 +123,17 @@
 // print mul(-2, 8)
 
 
-// fn fib(n) {
-//     if n < 2 {
-//         return n
-//     }
+fn fib(n) {
+    if n < 2 {
+        return n
+    }
 
-//     return fib(n - 2) + fib(n - 1)
-// }
+    return fib(n - 2) + fib(n - 1)
+}
 
-// var start = clock()
-// print fib(25)
-// print clock() - start
+var start = clock()
+print fib(25)
+print clock() - start
 
 
 /// Closure with upvalue
@@ -249,19 +249,35 @@
 
 
 /// Self
-struct CoffeeMaker {
-  fn init(coffee) {
-    self.coffee = coffee
-  }
+// struct CoffeeMaker {
+//   fn init(coffee) {
+//     self.coffee = coffee
+//   }
 
-  fn brew() {
-    print "Enjoy your cup of " + self.coffee
+//   fn brew() {
+//     print "Enjoy your cup of " + self.coffee
 
-    // No reusing the grounds!
-    self.coffee = null
-  }
-}
+//     // No reusing the grounds!
+//     self.coffee = null
+//   }
+// }
 
-var maker = CoffeeMaker("coffee and chicory")
-print maker.coffee
-maker.brew()
+// var maker = CoffeeMaker("coffee and chicory")
+// print maker.coffee
+// maker.brew()
+
+
+/// Op::Invoke with a field returning a method
+/// it will look for a method called 'field'
+// struct Oops {
+//   fn init() {
+//     fn f() {
+//       print "not a method"
+//     }
+
+//     self.field = f
+//   }
+// }
+
+// var oops = Oops()
+// oops.field()

@@ -189,14 +189,14 @@ impl GcTrace for Struct {
 
 
 pub struct Instance {
-    pub parent: GcRef<Struct>,
+    pub structure: GcRef<Struct>,
     pub fields: HashMap<GcRef<String>, Value>,
 }
 
 impl Instance {
-    pub fn new(parent: GcRef<Struct>) -> Self {
+    pub fn new(structure: GcRef<Struct>) -> Self {
         Self {
-            parent,
+            structure,
             fields: HashMap::new(),
         }
     }
@@ -204,7 +204,7 @@ impl Instance {
 
 impl GcTrace for Instance {
     fn format<'gc>(&self, f: &mut std::fmt::Formatter, gc: &'gc Gc) -> std::fmt::Result {
-        let parent = gc.deref(&self.parent);
+        let parent = gc.deref(&self.structure);
         let name = gc.deref(&parent.name);
         write!(f, "<instance of {}>", name)
     }

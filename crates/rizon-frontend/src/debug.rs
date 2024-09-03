@@ -65,11 +65,11 @@ impl<'vm> Disassembler<'vm> {
             Op::SetGlobal(i) => self.constant("OP_SET_GLOBAL", *i),
             Op::GetLocal(i) => byte_instruction("OP_GET_LOCAL", *i),
             Op::SetLocal(i) => byte_instruction("OP_SET_LOCAL", *i),
-            Op::JumpIfFalse(i) => jump_instruction("JUMP_IF_FALSE", offset as i32, *i),
-            Op::Jump(i) => jump_instruction("OP_JUMP", offset as i32, *i),
-            Op::Loop(i) => loop_instruction("OP_LOOP", offset as i32, *i),
+            Op::JumpIfFalse(i) => jump_instruction("JUMP_IF_FALSE", offset, *i),
+            Op::Jump(i) => jump_instruction("OP_JUMP", offset, *i),
+            Op::Loop(i) => loop_instruction("OP_LOOP", offset, *i),
             Op::CreateIter => println!("OP_CREATE_ITER"),
-            Op::ForIter(_, i) => jump_instruction("OP_FOR_ITER", offset as i32, *i),
+            Op::ForIter(i, j) => self.for_iter_instruction(*i, offset, *j),
             Op::Call(i) => byte_instruction("OP_CALL", *i),
             Op::Closure(i) => self.closure_instruction(offset, *i),
             Op::GetUpValue(i) => byte_instruction("OP_GET_UPVALUE", *i),
@@ -79,6 +79,7 @@ impl<'vm> Disassembler<'vm> {
             Op::GetProperty(i) => self.constant("OP_GET_PROPERTY", *i),
             Op::SetProperty(i) => self.constant("OP_SET_PROPERTY", *i),
             Op::Method(i) => self.constant("OP_METHOD", *i),
+            Op::Invoke((i, j)) => self.invoke_instruction(*i, *j),
         }
     }
 
@@ -101,21 +102,40 @@ impl<'vm> Disassembler<'vm> {
             }
         }
     }
+
+    fn for_iter_instruction(&self, iter_slot: u8, start_jump: usize, end_jump: u16) {
+        println!(
+            "{:16} slot {}, loop {} -> {}",
+            "OP_FOR_ITER",
+            iter_slot,
+            start_jump,
+            end_jump,
+        );
+    }
+
+    fn invoke_instruction(&self, name_idx: u8, args_count: u8) {
+        let name = self.chunk.constants[name_idx as usize];
+
+        println!(
+            "{:16} ({} args) {}",
+            "OP_INVOKE",
+            args_count,
+            GcFormatter::new(&name, self.gc),
+        );
+    }
 }
-
-
 
 
 fn byte_instruction(name: &str, slot: u8) {
     println!("{:16} {}", name, slot);
 }
 
-fn jump_instruction(name: &str, start: i32, offset: u16) {
-    println!("{:16} {} -> {}", name, start, start + offset as i32 + 1);
+fn jump_instruction(name: &str, start: usize, offset: u16) {
+    println!("{:16} {} -> {}", name, start, start as i32 + offset as i32 + 1);
 }
 
 // +1 is ok, it's because the Op::Loop is taken into account
-fn loop_instruction(name: &str, start: i32, offset: u16) {
-    println!("{:16} {} -> {}", name, start, start + 1 + offset as i32 * -1);
+fn loop_instruction(name: &str, start: usize, offset: u16) {
+    println!("{:16} {} -> {}", name, start, start as i32 + 1 + offset as i32 * -1);
 }
 

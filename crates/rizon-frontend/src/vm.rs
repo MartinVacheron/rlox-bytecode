@@ -317,13 +317,13 @@ impl Vm {
                     if let Value::Instance(inst) = self.peek(0) {
                         let inst = self.gc.deref(&inst);
                         let property_name = self.chunk().read_string(idx);
-                        
+
                         match inst.fields.get(&property_name) {
                             Some(&value) => {
                                 self.pop();
                                 self.push(value);
                             }
-                            None => self.bind_method(inst.parent, property_name)?,
+                            None => self.bind_method(inst.structure, property_name)?,
                         }
                     } else {
                         self.runtime_err("only instances have field");
@@ -356,6 +356,10 @@ impl Vm {
                         return Err(VmErr::Runtime);
                     }
                 }
+                Op::Invoke((name_idx, args_count)) => {
+                    let method = self.chunk().read_string(name_idx);
+                    self.invoke(method, args_count)?;
+                }
             }
         }
     }
@@ -386,9 +390,12 @@ impl Vm {
                 let instance = Instance::new(struct_ref);
                 let instance = self.gc.alloc(instance);
                 self.set_at(Value::Instance(instance), args_count);
-                let parent = self.gc.deref(&struct_ref);
+                let structure = self.gc.deref(&struct_ref);
 
-                if let Some(&Value::Closure(initializer)) = parent.methods.get(&self.init_string) {
+                // PERF: do not look up a hashmap?
+                // https://craftinginterpreters.com/methods-and-initializers.html#challenges
+                if let Some(&Value::Closure(initializer)) = structure.methods.get(&self.init_string)
+                {
                     self.call(initializer, args_count)?;
                 } else if args_count != 0 {
                     self.runtime_err(&format!("expected 0 argument but got {}", args_count));
@@ -452,8 +459,8 @@ impl Vm {
         }
     }
 
-    fn bind_method(&mut self, parent: GcRef<Struct>, name: GcRef<String>) -> Result<(), VmErr> {
-        let structure = self.gc.deref(&parent);
+    fn bind_method(&mut self, structure: GcRef<Struct>, name: GcRef<String>) -> Result<(), VmErr> {
+        let structure = self.gc.deref(&structure);
         if let Some(method) = structure.methods.get(&name) {
             let receiver = self.peek(0);
 
@@ -493,6 +500,41 @@ impl Vm {
         let upvalue = self.gc.alloc(upvalue);
         self.open_upvalues.push(upvalue);
         upvalue
+    }
+
+    fn invoke(&mut self, method_name: GcRef<String>, args_count: u8) -> VmRes {
+        let receiver = if let Value::Instance(inst) = self.peek(args_count as usize) {
+            self.gc.deref(&inst)
+        } else {
+            self.runtime_err("only instances have methods");
+            return Err(VmErr::Runtime);
+        };
+
+        // We first check if this is a field
+        match receiver.fields.get(&method_name) {
+            Some(&value) => {
+                self.set_at(value, args_count);
+                self.call_value(value, args_count)
+            }
+            None => self.invoke_from_struct(receiver.structure, &method_name, args_count)
+        }
+    }
+
+    fn invoke_from_struct(
+        &mut self,
+        structure: GcRef<Struct>,
+        method_name: &GcRef<String>,
+        args_count: u8,
+    ) -> VmRes {
+        let structure = self.gc.deref(&structure);
+        let method = if let Some(&Value::Closure(closure)) = structure.methods.get(method_name) {
+            closure
+        } else {
+            self.runtime_err(&format!("undefined property '{}'", self.gc.deref(method_name)));
+            return Err(VmErr::Runtime);
+        };
+
+        self.call(method, args_count)
     }
 
     // Close all upvalues that point to slot above it in the stack
