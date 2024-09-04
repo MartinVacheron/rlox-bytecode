@@ -5,6 +5,7 @@ use Precedence as P;
 
 pub(super) type ByteCodeGenFn<'src> = fn(&mut ByteCodeGen<'src>, bool);
 
+#[derive(Debug)]
 pub(super) struct Rule<'src> {
     pub prefix: Option<ByteCodeGenFn<'src>>,
     pub infix: Option<ByteCodeGenFn<'src>>,

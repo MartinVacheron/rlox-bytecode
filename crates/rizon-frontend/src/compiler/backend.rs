@@ -33,7 +33,11 @@ impl<'src> ByteCodeGen<'src> {
             self.emit_byte(Op::Null);
         }
 
-        self.expect_or_eof(TokenKind::NewLine, "expected end of line after var declaration");
+        // End of one-line if for example
+        if !self.check(TokenKind::RightBrace) {
+            self.expect_or_eof(TokenKind::NewLine, "expected end of line after var declaration");
+        }
+
         self.define_variable(id);
     }
 
@@ -95,7 +99,7 @@ impl<'src> ByteCodeGen<'src> {
         self.push_compiler(fn_type);
         self.begin_scope();
 
-        self.expect(TokenKind::LeftParen, "expected '(' after function name");
+        self.expect_and_skip(TokenKind::LeftParen, "expected '(' after function name");
 
         if !self.is_at(TokenKind::RightParen) {
             loop {
@@ -111,6 +115,7 @@ impl<'src> ByteCodeGen<'src> {
                 if !self.is_at(TokenKind::Comma) || self.check(TokenKind::RightParen) {
                     break
                 }
+                self.skip_new_lines();
             }
 
             self.expect_and_skip(TokenKind::RightParen, "expected ')' after function parameters");
@@ -230,14 +235,11 @@ impl<'src> ByteCodeGen<'src> {
 
     fn if_statement(&mut self) {
         self.expression();
-        self.expect_and_skip(TokenKind::LeftBrace, "expect '{' before 'if' body");
-
+        self.skip_new_lines();
         let then_jump = self.emit_jump(Op::JumpIfFalse(0xffff));
         // Will pop the condition if the branch is true
         self.emit_byte(Op::Pop);
         self.statement();
-
-        self.expect_and_skip(TokenKind::RightBrace, "expect '}' after 'if' body");
 
         let else_jump = self.emit_jump(Op::Jump(0xffff));
         
@@ -246,16 +248,14 @@ impl<'src> ByteCodeGen<'src> {
         self.emit_byte(Op::Pop);
 
         if self.is_at_and_skip(TokenKind::Else) {
-            self.expect_and_skip(TokenKind::LeftBrace, "expect '{' before 'then' body");
             self.statement();
-            self.expect_and_skip(TokenKind::RightBrace, "expect '}' after 'else' body");
         }
 
         self.patch_jump(else_jump);
     }
 
     fn while_statement(&mut self) {
-        let loop_start = self.chunk_last_idx();
+        let loop_start = self.start_loop();
 
         self.expression();
 
@@ -290,7 +290,7 @@ impl<'src> ByteCodeGen<'src> {
         self.mark_initialized();
         let iter_idx = self.compiler.scope.locals.len() - 1;
 
-        let loop_start = self.chunk_last_idx();
+        let loop_start = self.start_loop();
         let exit_jump = self.emit_jump(Op::ForIter(iter_idx as u8, 0xffff));
 
         // The fact of doing a scope with statement allow to clean the whole loop before
@@ -336,7 +336,7 @@ impl<'src> ByteCodeGen<'src> {
         
         let can_assign = precedence <= P::Assignment;
         let prefix_rule = self.get_rule(self.previous.kind).prefix;
-
+        
         match prefix_rule {
             Some(f) => f(self, can_assign),
             None => {
@@ -424,6 +424,7 @@ impl<'src> ByteCodeGen<'src> {
 
         if !self.is_at(TokenKind::RightParen) {
             loop {
+                self.skip_new_lines();
                 self.expression();
 
                 if count == 255 {
@@ -499,7 +500,7 @@ impl<'src> ByteCodeGen<'src> {
             Some(local_idx) => (Op::SetLocal(local_idx), Op::GetLocal(local_idx)),
         };
 
-        if self.is_at(TokenKind::Equal) && can_assign {
+        if can_assign && self.is_at(TokenKind::Equal) {
             self.expression();
             self.emit_byte(set_op);
         } else {
@@ -519,12 +520,13 @@ impl<'src> ByteCodeGen<'src> {
     fn make_constant(&mut self, value: Value) -> u8 {
         let id = self.chunk_mut().write_constant(value);
 
-        if id > u8::max as usize {
-            self.error("Too many constants in one chunk");
-            return 0;
+        match u8::try_from(id) {
+            Ok(id) => id,
+            Err(_) => {
+                self.error("Too many constants in one chunk");
+                0
+            }
         }
-
-        id as u8
     }
 
     fn get_rule(&self, kind: TokenKind) -> &Rule<'src> {
@@ -568,10 +570,14 @@ impl<'src> ByteCodeGen<'src> {
         self.chunk_last_idx()
     }
 
+    fn start_loop(&self) -> usize {
+        self.chunk().code.len()
+    }
+
     fn emit_loop(&mut self, start: usize) {
         // +1 because when we hit the Op::Loop, we are already passed it
         // we have to jump 1 more backward
-        let offset = self.chunk_last_idx() + 1 - start;
+        let offset = self.chunk().code.len() - start + 1;
 
         let offset = match u16::try_from(offset) {
             Ok(o) => o,

@@ -151,7 +151,7 @@ impl<'src> Lexer<'src> {
         }
 
         if self.eof() {
-            return self.error_token("Unterminated string");
+            return self.error_token("unterminated string");
         }
 
         // Closing quote
@@ -293,7 +293,7 @@ impl<'src> Lexer<'src> {
     }
 
     fn peek_next(&self) -> u8 {
-        if self.eof() {
+        if self.current + 1 == self.code.len() {
             return b'\0';
         }
 

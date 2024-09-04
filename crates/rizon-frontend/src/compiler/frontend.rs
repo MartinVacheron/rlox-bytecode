@@ -1,5 +1,11 @@
 use super::ByteCodeGen;
-use crate::lexer::{Token, TokenKind};
+use crate::lexer::TokenKind;
+
+
+pub enum ErrTokenPos {
+    Previous,
+    Current,
+}
 
 impl<'src> ByteCodeGen<'src> {
     pub(super) fn advance(&mut self) {
@@ -12,9 +18,7 @@ impl<'src> ByteCodeGen<'src> {
                 break;
             }
 
-            self.had_error = true;
-            self.panic_mode = true;
-            self.error_at_current(&self.current.lexeme)
+            self.error_at_current(&self.current.lexeme);
         }
     }
 
@@ -72,28 +76,36 @@ impl<'src> ByteCodeGen<'src> {
         self.current.kind == TokenKind::Eof
     }
 
-    pub(super) fn error_at_current(&self, msg: &str) {
-        self.error_at(&self.current, msg);
+    pub(super) fn error_at_current(&mut self, msg: &str) {
+        self.error_at(ErrTokenPos::Current, msg);
     }
 
-    pub(super) fn error(&self, msg: &str) {
-        self.error_at(&self.previous, msg);
+    pub(super) fn error(&mut self, msg: &str) {
+        self.error_at(ErrTokenPos::Previous, msg);
     }
 
-    pub(super) fn error_at(&self, token: &Token, msg: &str) {
+    pub(super) fn error_at(&mut self, token_pos: ErrTokenPos, msg: &str) {
         if self.panic_mode {
             return;
         }
 
-        eprint!("[line {}] Error", token.line);
+        let token = match token_pos {
+            ErrTokenPos::Previous => &self.previous,
+            ErrTokenPos::Current => &self.current,
+        };
+
+        print!("[line {}] Error", token.line);
 
         match token.kind {
-            TokenKind::Eof => eprint!(" at end"),
+            TokenKind::Eof => print!(" at end"),
             TokenKind::Error => {}
-            _ => eprint!(" at '{}'", token.lexeme),
+            _ => print!(" at '{}'", token.lexeme),
         }
 
-        eprintln!(": {}", msg);
+        println!(": {}", msg);
+
+        self.had_error = true;
+        self.panic_mode = true;
     }
 
     pub(super) fn synchronize(&mut self) {

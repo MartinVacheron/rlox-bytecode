@@ -45,7 +45,6 @@ pub enum Op {
 
 #[derive(Default, Clone, Debug)]
 pub struct Chunk {
-    // code: Vec<u8>
     pub code: Vec<Op>,
     pub constants: Vec<Value>,
     pub lines: Vec<usize>,

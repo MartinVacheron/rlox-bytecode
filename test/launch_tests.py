@@ -25,7 +25,7 @@ total_ok = 0
 total_ko = 0
 
 for dir in os.listdir():
-    if dir in ["benchmark", "benchmark_results", "__pycache__"] or os.path.isfile(dir):
+    if dir in ["benchmark", "benchmark_results", "__pycache__", "limit"] or os.path.isfile(dir):
         continue
 
     print(f"\n\tTesting folder: {clr_str(dir, YELLOW)}\n")
@@ -43,7 +43,7 @@ for dir in os.listdir():
         if args.print_err:
             print(f"running {dir}::{file}...")
             
-            result = subprocess.run(["..\\target\\debug\\rizon-main.exe", "-f", path], capture_output=True)
+            result = subprocess.run(["..\\target\\debug\\rizon-main.exe", path], capture_output=True)
             rizon_output = result.stdout.decode().strip()
 
             for line in rizon_output.split("\n"):
@@ -53,28 +53,26 @@ for dir in os.listdir():
                     continue
 
         else:
-            result = subprocess.run(["..\\target\\debug\\rizon-main.exe", "-f", path], capture_output=True)
-
+            result = subprocess.run(["..\\target\\debug\\rizon-main.exe", path], capture_output=True)
             content = open(path, "r", encoding="utf-8")
 
             errors = []
             expects = []
             for line in content.readlines():
                 if "error" in line:
-                    err = line.split("error: ")[1].strip()
+                    err = line.split(": ")[1].strip()
                     errors.append(err)
                 elif "expect" in line:
                     exp = line.split("expect: ")[1].strip()
                     expects.append(exp)
 
             rizon_output = result.stdout.decode().strip()
-
             rizon_res = []
             rizon_err = []
             for line in rizon_output.split("\n"):
-                if "-->" in line or " | " in line or "^" in line or line == "":
+                if "-->" in line or " | " in line or "^" in line or line == "" or "] in " in line:
                     continue
-                elif "error" in line:
+                elif "error" in line or "Error" in line:
                     rizon_err.append(line.split(": ")[1])
                 else:
                     rizon_res.append(line.strip())

@@ -1,0 +1,16 @@
+var start = clock()
+
+var i = 0
+// print i
+while i < 5 {
+    var j = 10
+    // print j
+    // var check = 66
+    // print check
+
+    while j < 11 {
+        j = j + 1
+    }
+
+    i = 5
+}

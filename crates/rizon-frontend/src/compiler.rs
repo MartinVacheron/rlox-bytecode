@@ -10,7 +10,7 @@ mod rules;
 
 use rules::{make_rules, Rules};
 
-#[derive(PartialEq, PartialOrd)]
+#[derive(PartialEq, PartialOrd, Debug)]
 enum Precedence {
     None,
     Assignment, // =
@@ -106,7 +106,7 @@ impl<'src> Compiler<'src> {
         for (idx, local) in self.scope.locals.iter().enumerate().rev() {
             if local.name == name {
                 if local.depth == -1 {
-                    eprintln!("can't use local variable in its own initializer");
+                    println!("error: can't use local variable in its own initializer");
                 }
 
                 return Some(idx as u8)
@@ -142,7 +142,7 @@ impl<'src> Compiler<'src> {
         }
 
         if upvalue_count == Self::LOCAL_COUNT {
-            eprintln!("too many closure variables in function")
+            println!("too many closure variables in function")
         }
 
         self.function.add_upvalue(idx, is_local);

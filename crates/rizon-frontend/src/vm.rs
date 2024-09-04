@@ -124,7 +124,7 @@ impl Vm {
                     self.push(res);
                 }
                 Op::Constant(idx) => {
-                    let val = self.chunk().constants[idx as usize].clone();
+                    let val = self.chunk().constants[idx as usize];
                     self.push(val);
                 }
                 Op::Negate => {
@@ -146,7 +146,8 @@ impl Vm {
                             Value::Str(result)
                         }
                         _ => {
-                            dbg!(lhs, rhs);
+                    dbg!(&lhs, &rhs);
+                    dbg!(&self.stack);
                             self.runtime_err("Operation not allowed");
                             return Err(VmErr::Runtime);
                         }
@@ -154,20 +155,21 @@ impl Vm {
 
                     self.push(value);
                 }
-                Op::Subtract => self.binop(|a, b| a.sub(b)),
-                Op::Multiply => self.binop(|a, b| a.mul(b)),
-                Op::Divide => self.binop(|a, b| a.div(b)),
+                Op::Subtract => self.binop(|a, b| a.sub(b))?,
+                Op::Multiply => self.binop(|a, b| a.mul(b))?,
+                Op::Divide => self.binop(|a, b| a.div(b))?,
                 Op::True => self.push(Value::Bool(true)),
                 Op::False => self.push(Value::Bool(false)),
                 Op::Null => self.push(Value::Null),
                 Op::Not => {
                     if let Err(e) = self.peek_mut(0).not() {
-                        self.runtime_err(&e.to_string())
+                        self.runtime_err(&e.to_string());
+                        return Err(VmErr::Runtime)
                     }
                 }
-                Op::Equal => self.binop(|a, b| a.eq(b)),
-                Op::Greater => self.binop(|a, b| a.gt(b)),
-                Op::Less => self.binop(|a, b| a.lt(b)),
+                Op::Equal => self.binop(|a, b| a.eq(b))?,
+                Op::Greater => self.binop(|a, b| a.gt(b))?,
+                Op::Less => self.binop(|a, b| a.lt(b))?,
                 Op::Print => {
                     let value = self.pop();
                     println!("{}", GcFormatter::new(&value, &self.gc));
@@ -213,6 +215,8 @@ impl Vm {
                         if !b {
                             self.frame_mut().ip += idx as usize;
                         }
+                    } else if let Value::Null = self.peek(0) {
+                        self.frame_mut().ip += idx as usize;
                     }
                 }
                 Op::Jump(idx) => self.frame_mut().ip += idx as usize,
@@ -254,7 +258,7 @@ impl Vm {
                     let callee = self.peek(args_count as usize);
 
                     if let Err(e) = self.call_value(callee, args_count) {
-                        eprintln!("{}", e.to_string());
+                        println!("{}", e.to_string());
                         return Err(VmErr::Runtime);
                     }
                 }
@@ -341,10 +345,10 @@ impl Vm {
                     if let Value::Instance(inst) = self.pop() {
                         let inst = self.gc.deref_mut(&inst);
 
-                        match inst.fields.insert(field_name, value) {
-                            Some(_) => {}
-                            None => eprintln!("Instance dosen't have field"),
-                        }
+                        inst.fields.insert(field_name, value);
+                    } else {
+                        self.runtime_err("only instances have field");
+                        return Err(VmErr::Runtime);
                     }
 
                     // We put the assignement value back on top to return it as:
@@ -355,7 +359,7 @@ impl Vm {
                     let method_name = self.chunk().read_string(idx);
 
                     if let Err(e) = self.define_method(method_name) {
-                        eprintln!("{}", e.to_string());
+                        println!("{}", e.to_string());
                         return Err(VmErr::Runtime);
                     }
                 }
@@ -367,13 +371,19 @@ impl Vm {
         }
     }
 
-    fn binop(&mut self, operation: fn(Value, Value) -> Option<Value>) {
+    fn binop(&mut self, operation: fn(Value, Value) -> Option<Value>) -> VmRes {
         // Pop backward as it is a stack
         let (rhs, lhs) = (self.pop(), self.pop());
 
         match operation(lhs, rhs) {
-            Some(res) => self.push(res),
-            None => self.runtime_err("Operation not allowed"),
+            Some(res) => {
+                self.push(res);
+                Ok(())
+            },
+            None => {
+                self.runtime_err("Operation not allowed");
+                Err(VmErr::Runtime)
+            }
         }
     }
 
@@ -386,7 +396,7 @@ impl Vm {
                     (self.stack.len() - 1) - args_count as usize,
                 );
                 self.stack
-                    .truncate(self.stack.len() - args_count as usize + 1);
+                    .truncate(self.stack.len() - args_count as usize - 1);
                 self.push(res);
             }
             Value::Struct(struct_ref) => {
@@ -650,7 +660,7 @@ impl Vm {
     }
 
     fn runtime_err(&self, msg: &str) {
-        eprintln!(
+        println!(
             "[line {}] Error: {}",
             self.chunk().lines[self.chunk().code.len() - 1] + 1,
             msg
@@ -661,12 +671,12 @@ impl Vm {
             let function = self.gc.deref(&closure.function);
             let name = self.gc.deref(&function.name);
 
-            eprint!("[line {}] in ", function.chunk.lines[frame.ip] + 1,);
+            print!("[line {}] in ", function.chunk.lines[frame.ip] + 1,);
 
             if name.is_empty() {
-                eprintln!("script");
+                println!("script");
             } else {
-                eprintln!("{}()", name);
+                println!("{}()", name);
             }
         }
     }

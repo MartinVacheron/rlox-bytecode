@@ -50,11 +50,11 @@ impl Value {
 
     pub fn eq(self, other: Self) -> Option<Self> {
         match (self, other) {
-            (Int(v1), Int(v2)) => Some(Bool(v1 == v2)),
-            (Float(v1), Float(v2)) => Some(Bool(v1 == v2)),
-            (Bool(v1), Bool(v2)) => Some(Bool(v1 == v2)),
-            (Str(v1), Str(v2)) => Some(Bool(v1 == v2)),
-            (Null, Null) => Some(Bool(true)),
+            (Int(_), Int(_))
+            | (Float(_), Float(_))
+            | (Bool(_), Bool(_))
+            | (Str(_), Str(_))
+            | (Null, Null) => Some(Bool(self == other)),
             (_, Null) => Some(Bool(false)),
             (Null, _) => Some(Bool(false)),
             _ => None,
