@@ -1,16 +1,16 @@
-use crate::{chunk::{Chunk, Op}, gc::{Gc, GcFormatter}, object::FnUpValue, value::Value};
+use std::ops::Deref;
+
+use crate::{chunk::{Chunk, Op}, object::FnUpValue, value::Value};
 
 
 pub struct Disassembler<'vm> {
-    gc: &'vm Gc,
     chunk: &'vm Chunk,
     stack: Option<&'vm Vec<Value>>,
 }
 
 impl<'vm> Disassembler<'vm> {
-    pub fn new(gc: &'vm Gc, chunk: &'vm Chunk, stack: Option<&'vm Vec<Value>>) -> Self {
+    pub fn new(chunk: &'vm Chunk, stack: Option<&'vm Vec<Value>>) -> Self {
         Self {
-            gc,
             chunk,
             stack,
         }
@@ -19,9 +19,7 @@ impl<'vm> Disassembler<'vm> {
     pub fn print_stack(&self) {
         if let Some(stack) = self.stack {
             print!("          ");
-            stack.iter().for_each(|v| {
-                print!("[ {} ] ", GcFormatter::new(v, &self.gc));
-            });
+            stack.iter().for_each(|v| print!("[ {} ] ", v));
             println!();
         }
     }
@@ -85,16 +83,16 @@ impl<'vm> Disassembler<'vm> {
 
     fn constant(&self, name: &str, idx: u8) {
         let constant = &self.chunk.constants[idx as usize];
-        println!("{:16} {} '{}'", name, idx, GcFormatter::new(constant, self.gc));
+        println!("{:16} {} '{}'", name, idx, constant);
     }
 
     fn closure_instruction(&self, offset: usize, idx: u8) {
         let closure = &self.chunk.constants[idx as usize];
-        println!("{:16} {} '{}'", "OP_CLOSURE", idx, GcFormatter::new(closure, self.gc));
+        println!("{:16} {} '{}'", "OP_CLOSURE", idx, closure);
 
         if let Value::Closure(closure) = closure {
-            let closure = self.gc.deref(closure);
-            let function = self.gc.deref(&closure.function);
+            // let closure = self.gc.deref(closure);
+            let function = closure.function.deref();
 
             for (i, FnUpValue { index, is_local }) in function.upvalues.iter().enumerate() {
                 let local = if *is_local { "local" } else { "upvalue" };
@@ -120,7 +118,7 @@ impl<'vm> Disassembler<'vm> {
             "{:16} ({} args) {}",
             "OP_INVOKE",
             args_count,
-            GcFormatter::new(&name, self.gc),
+            name,
         );
     }
 }

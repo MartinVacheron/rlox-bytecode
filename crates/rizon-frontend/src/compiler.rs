@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use anyhow::{bail, Result};
 
 use crate::{
@@ -292,14 +294,15 @@ impl<'src> ByteCodeGen<'src> {
     }
 
     fn dis_compiler(&self) {
-        let name = self.gc.deref(&self.compiler.function.name);
+        // let name = self.gc.deref(&self.compiler.function.name);
+        let name = self.compiler.function.name.deref();
         let name = if name.is_empty() {
             "<script>"
         } else {
             name
         };
 
-        let disassembler = Disassembler::new(&self.gc, &self.compiler.function.chunk, None);
+        let disassembler = Disassembler::new(&self.compiler.function.chunk, None);
 
         disassembler.disassemble(name);
         println!();

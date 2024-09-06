@@ -1,7 +1,8 @@
 use anyhow::{bail, Result};
+use std::{fmt::Display, ops::Deref};
 use Value::*;
 
-use crate::{gc::{Gc, GcRef, GcTrace}, object::{BoundMethod, Closure, Function, Instance, Iterator, Struct}};
+use crate::{gc::GcRef, object::{BoundMethod, Closure, Function, Instance, Iterator, Struct}};
 
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -21,7 +22,6 @@ pub enum Value {
 }
 
 pub type NativeFunction = fn(usize, usize) -> Value;
-
 
 impl Value {
     pub fn sub(self, other: Self) -> Option<Self> {
@@ -97,45 +97,21 @@ impl Value {
     }
 }
 
-impl GcTrace for Value {
-    fn format<'gc>(&self, f: &mut std::fmt::Formatter, gc: &'gc crate::gc::Gc) -> std::fmt::Result {
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Int(v) => write!(f, "{}", v),
             Float(v) => write!(f, "{}", v),
             Bool(v) => write!(f, "{}", v),
-            Str(v) => gc.deref(v).format(f, gc),
-            Iter(v) => gc.deref(v).format(f, gc),
-            Null => write!(f, "null"),
-            Fn(v) => gc.deref(v).format(f, gc),
+            Str(v) => write!(f, "\"{}\"", v.deref()),
+            Iter(_) => todo!(),
+            Fn(v) => write!(f, "<fn {}>", v.name.deref()),
+            Closure(v) => write!(f, "<fn {}>", v.function.name.deref()),
             NativeFn(_) => write!(f, "<native fn>"),
-            Closure(v) => gc.deref(v).format(f, gc),
-            Struct(v) => gc.deref(v).format(f, gc),
-            Instance(v) => gc.deref(v).format(f, gc),
-            BoundMethod(v) => gc.deref(v).format(f, gc),
+            Struct(v) => write!(f, "<structure {}>", v.name.deref()),
+            Instance(v) => write!(f, "<instance of {}>", v.structure.name.deref()),
+            BoundMethod(v) => write!(f, "<fn {}>", v.method.function.name.deref()),
+            Null => write!(f, "null"),
         }
-    }
-
-    fn trace(&self, gc: &mut Gc) {
-        match self {
-            Value::BoundMethod(v) => gc.mark_object(*v),
-            Value::Struct(v) => gc.mark_object(*v),
-            Value::Closure(v) => gc.mark_object(*v),
-            Value::Fn(v) => gc.mark_object(*v),
-            Value::Instance(v) => gc.mark_object(*v),
-            Value::Str(v) => gc.mark_object(*v),
-            _ => (),
-        }
-    }
-
-    fn size(&self) -> usize {
-        0
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        panic!("cannot dereference this value")
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        panic!("cannot dereference this value")
     }
 }

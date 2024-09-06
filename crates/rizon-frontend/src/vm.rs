@@ -1,11 +1,13 @@
+use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 
 use crate::chunk::{Chunk, Op};
 use crate::compiler::ByteCodeGen;
 use crate::debug::Disassembler;
-use crate::gc::{Gc, GcFormatter, GcRef, GcTrace};
+use crate::gc::{Gc, GcRef};
 use crate::object::{BoundMethod, Closure, Instance, Iterator, Struct, UpValue};
 use crate::value::{NativeFunction, Value};
 
@@ -31,7 +33,6 @@ pub enum VmErr {
 
 pub type VmRes = Result<(), VmErr>;
 
-#[derive(Debug)]
 struct CallFrame {
     closure: GcRef<Closure>,
     ip: usize,
@@ -93,7 +94,7 @@ impl Vm {
     fn run(&mut self) -> VmRes {
         loop {
             if self.flags.disassemble_instructions {
-                let disassembler = Disassembler::new(&self.gc, self.chunk(), Some(&self.stack));
+                let disassembler = Disassembler::new(self.chunk(), Some(&self.stack));
 
                 if self.flags.print_stack {
                     disassembler.print_stack();
@@ -139,15 +140,11 @@ impl Vm {
                         (Value::Int(v1), Value::Int(v2)) => Value::Int(v1 + v2),
                         (Value::Float(v1), Value::Float(v2)) => Value::Float(v1 + v2),
                         (Value::Str(v1), Value::Str(v2)) => {
-                            let s1 = self.gc.deref(&v1);
-                            let s2 = self.gc.deref(&v2);
-                            let result = format!("{}{}", s1, s2);
+                            let result = format!("{}{}", v1.deref(), v2.deref());
                             let result = self.intern(result);
                             Value::Str(result)
                         }
                         _ => {
-                    dbg!(&lhs, &rhs);
-                    dbg!(&self.stack);
                             self.runtime_err("Operation not allowed");
                             return Err(VmErr::Runtime);
                         }
@@ -170,13 +167,8 @@ impl Vm {
                 Op::Equal => self.binop(|a, b| a.eq(b))?,
                 Op::Greater => self.binop(|a, b| a.gt(b))?,
                 Op::Less => self.binop(|a, b| a.lt(b))?,
-                Op::Print => {
-                    let value = self.pop();
-                    println!("{}", GcFormatter::new(&value, &self.gc));
-                }
-                Op::Pop => {
-                    self.pop();
-                }
+                Op::Print => println!("{}", self.pop()),
+                Op::Pop => { _ = self.pop(); },
                 Op::DefineGlobal(idx) => {
                     let name = self.chunk().read_string(idx);
                     let value = self.pop();
@@ -188,8 +180,7 @@ impl Vm {
                     match self.globals.get(&name) {
                         Some(&glob) => self.push(glob),
                         None => {
-                            let name = self.gc.deref(&name);
-                            self.runtime_err(&format!("Undefined variable '{}'", name));
+                            self.runtime_err(&format!("Undefined variable '{}'", name.deref()));
                             return Err(VmErr::Runtime);
                         }
                     }
@@ -198,7 +189,7 @@ impl Vm {
                     let name = self.chunk().read_string(idx);
 
                     if self.globals.insert(name, self.peek(0)).is_none() {
-                        self.runtime_err(&format!("Undefined variable '{}'", self.gc.deref(&name)));
+                        self.runtime_err(&format!("Undefined variable '{}'", name.deref()));
                         return Err(VmErr::Runtime);
                     }
                 }
@@ -236,8 +227,7 @@ impl Vm {
                 Op::ForIter(iter, idx) => {
                     let iter_idx = self.frame().slots + iter as usize;
 
-                    if let Value::Iter(iter) = &self.stack[iter_idx] {
-                        let iter = self.gc.deref_mut(iter);
+                    if let Value::Iter(mut iter) = &self.stack[iter_idx] {
 
                         match iter.range.next() {
                             Some(v) => {
@@ -267,10 +257,10 @@ impl Vm {
 
                     if let Value::Fn(function) = function {
                         let mut closure = Closure::from_fn(function);
-                        let upvalue_count = self.gc.deref(&function).upvalues.len();
+                        let upvalue_count = function.upvalues.len();
 
                         for i in 0..upvalue_count {
-                            let upvalue = self.gc.deref(&function).upvalues[i];
+                            let upvalue = function.upvalues[i];
 
                             let obj_upavlue = if upvalue.is_local {
                                 self.capture_value(self.frame().slots + upvalue.index as usize)
@@ -289,7 +279,6 @@ impl Vm {
                 }
                 Op::GetUpValue(idx) => {
                     let upvalue = self.closure().upvalues[idx as usize];
-                    let upvalue = self.gc.deref(&upvalue);
 
                     let val = match upvalue.closed {
                         Some(v) => v,
@@ -300,8 +289,7 @@ impl Vm {
                 }
                 Op::SetUpValue(idx) => {
                     let value = self.peek(0);
-                    let upvalue = self.closure().upvalues[idx as usize];
-                    let upvalue = self.gc.deref_mut(&upvalue);
+                    let mut upvalue = self.closure().upvalues[idx as usize];
 
                     if upvalue.closed.is_none() {
                         self.stack[upvalue.location] = value;
@@ -322,7 +310,6 @@ impl Vm {
                 // NOTE: Field shadowing methods, do we want that?
                 Op::GetProperty(idx) => {
                     if let Value::Instance(inst) = self.peek(0) {
-                        let inst = self.gc.deref(&inst);
                         let property_name = self.chunk().read_string(idx);
 
                         match inst.fields.get(&property_name) {
@@ -342,9 +329,7 @@ impl Vm {
                     let value = self.pop();
                     let field_name = self.chunk().read_string(idx);
 
-                    if let Value::Instance(inst) = self.pop() {
-                        let inst = self.gc.deref_mut(&inst);
-
+                    if let Value::Instance(mut inst) = self.pop() {
                         inst.fields.insert(field_name, value);
                     } else {
                         self.runtime_err("only instances have field");
@@ -403,11 +388,10 @@ impl Vm {
                 let instance = Instance::new(struct_ref);
                 let instance = self.alloc(instance);
                 self.set_at(Value::Instance(instance), args_count);
-                let structure = self.gc.deref(&struct_ref);
 
                 // PERF: do not look up a hashmap?
                 // https://craftinginterpreters.com/methods-and-initializers.html#challenges
-                if let Some(&Value::Closure(initializer)) = structure.methods.get(&self.init_string)
+                if let Some(&Value::Closure(initializer)) = struct_ref.methods.get(&self.init_string)
                 {
                     self.call(initializer, args_count)?;
                 } else if args_count != 0 {
@@ -416,7 +400,6 @@ impl Vm {
                 }
             }
             Value::BoundMethod(bound) => {
-                let bound = self.gc.deref(&bound);
                 let method = bound.method;
                 let receiver = bound.receiver;
                 self.set_at(receiver, args_count);
@@ -432,8 +415,7 @@ impl Vm {
     }
 
     fn call(&mut self, closure_ref: GcRef<Closure>, args_count: u8) -> VmRes {
-        let closure = self.gc.deref(&closure_ref);
-        let function = self.gc.deref(&closure.function);
+        let function = closure_ref.function;
 
         if self.frames.len() == Self::FRAMES_MAX {
             self.runtime_err("stack overflow");
@@ -461,8 +443,7 @@ impl Vm {
     fn define_method(&mut self, name: GcRef<String>) -> VmRes {
         let method = self.pop();
 
-        if let Value::Struct(structure) = self.peek(0) {
-            let structure = self.gc.deref_mut(&structure);
+        if let Value::Struct(mut structure) = self.peek(0) {
             structure.methods.insert(name, method);
 
             Ok(())
@@ -473,7 +454,6 @@ impl Vm {
     }
 
     fn bind_method(&mut self, structure: GcRef<Struct>, name: GcRef<String>) -> Result<(), VmErr> {
-        let structure = self.gc.deref(&structure);
         if let Some(method) = structure.methods.get(&name) {
             let receiver = self.peek(0);
 
@@ -489,7 +469,7 @@ impl Vm {
         } else {
             self.runtime_err(&format!(
                 "instance dosen't have field {}",
-                self.gc.deref(&name)
+                name.deref()
             ));
             Err(VmErr::Runtime)
         }
@@ -497,15 +477,13 @@ impl Vm {
 
     fn capture_value(&mut self, index: usize) -> GcRef<UpValue> {
         // Ensure only one UpValue pointing to a slot
-        for upvalue_ref in self.open_upvalues.iter().rev() {
-            let upvalue = self.gc.deref(upvalue_ref);
-
+        for upvalue in self.open_upvalues.iter().rev() {
             if upvalue.location < index {
                 break;
             }
 
             if upvalue.location == index {
-                return *upvalue_ref;
+                return *upvalue;
             }
         }
 
@@ -517,7 +495,7 @@ impl Vm {
 
     fn invoke(&mut self, method_name: GcRef<String>, args_count: u8) -> VmRes {
         let receiver = if let Value::Instance(inst) = self.peek(args_count as usize) {
-            self.gc.deref(&inst)
+            inst
         } else {
             self.runtime_err("only instances have methods");
             return Err(VmErr::Runtime);
@@ -539,11 +517,10 @@ impl Vm {
         method_name: &GcRef<String>,
         args_count: u8,
     ) -> VmRes {
-        let structure = self.gc.deref(&structure);
         let method = if let Some(&Value::Closure(closure)) = structure.methods.get(method_name) {
             closure
         } else {
-            self.runtime_err(&format!("undefined property '{}'", self.gc.deref(method_name)));
+            self.runtime_err(&format!("undefined property '{}'", method_name.deref()));
             return Err(VmErr::Runtime);
         };
 
@@ -559,8 +536,7 @@ impl Vm {
                 break;
             }
 
-            let upvalue_ref = self.open_upvalues[i - 1];
-            let upvalue = self.gc.deref_mut(&upvalue_ref);
+            let mut upvalue = self.open_upvalues[i - 1];
 
             if upvalue.location < last {
                 break;
@@ -579,7 +555,7 @@ impl Vm {
         self.globals.insert(name, Value::NativeFn(function));
     }
 
-    fn alloc<T: GcTrace + 'static + Debug>(&mut self, object: T) -> GcRef<T> {
+    fn alloc<T: Any>(&mut self, object: T) -> GcRef<T> {
         self.mark_and_sweep();
         self.gc.alloc(object)
     }
@@ -596,7 +572,7 @@ impl Vm {
             }
 
             self.mark_roots();
-            self.gc.collect_garbage();
+            unsafe { self.gc.collect_garbage() };
 
             if self.flags.verbose_gc {
                 println!("-- GC end");
@@ -605,20 +581,20 @@ impl Vm {
     }
 
     fn mark_roots(&mut self) {
-        for &value in &self.stack {
+        for value in &self.stack {
             self.gc.mark_value(value);
         }
 
         for frame in &self.frames {
-            self.gc.mark_object(frame.closure)
+            self.gc.mark_object(&frame.closure)
         }
 
-        for &upvalue in &self.open_upvalues {
+        for upvalue in &self.open_upvalues {
             self.gc.mark_object(upvalue);
         }
 
         self.gc.mark_table(&self.globals);
-        self.gc.mark_object(self.init_string);
+        self.gc.mark_object(&self.init_string);
     }
 
     fn pop(&mut self) -> Value {
@@ -638,11 +614,11 @@ impl Vm {
     }
 
     fn chunk(&self) -> &Chunk {
-        &self.gc.deref(&self.closure().function).chunk
+        &self.closure().function.chunk
     }
 
     fn closure(&self) -> &Closure {
-        self.gc.deref(&self.frame().closure)
+        self.frame().closure.deref()
     }
 
     fn peek(&self, distance: usize) -> Value {
@@ -667,9 +643,8 @@ impl Vm {
         );
 
         for frame in self.frames.iter().rev() {
-            let closure = self.gc.deref(&frame.closure);
-            let function = self.gc.deref(&closure.function);
-            let name = self.gc.deref(&function.name);
+            let function = frame.closure.function;
+            let name = function.name.deref();
 
             print!("[line {}] in ", function.chunk.lines[frame.ip] + 1,);
 

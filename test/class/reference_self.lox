@@ -4,4 +4,4 @@ struct Foo {
   }
 }
 
-print Foo().returnSelf() // expect: <struct Foo>
+print Foo().returnSelf() // expect: <structure Foo>
