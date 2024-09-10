@@ -1,5 +1,7 @@
 use std::{collections::HashMap, ops::Range};
 
+use ahash::AHashMap;
+
 use crate::{
     chunk::Chunk,
     value::Value,
@@ -85,14 +87,14 @@ impl UpValue {
 #[derive(Debug)]
 pub struct Struct {
     pub name: GcRef<String>,
-    pub methods: HashMap<GcRef<String>, Value>,
+    pub methods: AHashMap<GcRef<String>, Value>,
 }
 
 impl Struct {
     pub fn new(name: GcRef<String>) -> Self {
         Self {
             name,
-            methods: HashMap::new(),
+            methods: AHashMap::new(),
         }
     }
 }
@@ -101,14 +103,14 @@ impl Struct {
 #[derive(Debug)]
 pub struct Instance {
     pub structure: GcRef<Struct>,
-    pub fields: HashMap<GcRef<String>, Value>,
+    pub fields: AHashMap<GcRef<String>, Value>,
 }
 
 impl Instance {
     pub fn new(structure: GcRef<Struct>) -> Self {
         Self {
             structure,
-            fields: HashMap::new(),
+            fields: AHashMap::new(),
         }
     }
 }

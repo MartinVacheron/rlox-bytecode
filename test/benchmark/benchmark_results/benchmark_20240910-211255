@@ -1,0 +1,40 @@
+     --- Running benchmarks for Rizon language ---
+
+Benchmark message: ip, chunk, frame and stack top as unsafe pointers
+
+running arithmetic.lox...
+	global:  mean: 1.676400, stdev: 0.017450
+
+running binary_trees.lox...
+	global:  mean: 5.306600, stdev: 0.094151
+
+running equality.lox...
+	global:  mean: 5.705900, stdev: 0.056707
+
+running fib.lox...
+	global:  mean: 1.619300, stdev: 0.028825
+
+running instantiation.lox...
+	global:  mean: 3.581000, stdev: 0.041323
+
+running invocation.lox...
+	global:  mean: 0.823500, stdev: 0.022883
+
+running method_call.lox...
+	global:  mean: 0.220400, stdev: 0.003950
+
+running properties.lox...
+	global:  mean: 1.351300, stdev: 0.019698
+
+running string_equality.lox...
+	global:  mean: 4.636100, stdev: 0.161703
+
+running trees.lox...
+	global:  mean: 10.102800, stdev: 1.761903
+
+running zoo.lox...
+	global:  mean: 1.464900, stdev: 0.135700
+
+running zoo_batch.lox...
+	global:  mean: 10.003100, stdev: 0.002183
+

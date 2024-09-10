@@ -8,3 +8,4 @@ members = [
 [workspace.dependencies]
 rizon-frontend = { path = "crates/rizon-frontend" }
 thiserror = "1.0"
+ahash = "0.8.11"

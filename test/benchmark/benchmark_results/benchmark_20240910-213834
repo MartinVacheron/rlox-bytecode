@@ -1,0 +1,40 @@
+     --- Running benchmarks for Rizon language ---
+
+Benchmark message: changed hash map to aHash crate
+
+running arithmetic.lox...
+	global:  mean: 0.775400, stdev: 0.030071
+
+running binary_trees.lox...
+	global:  mean: 4.027400, stdev: 0.053552
+
+running equality.lox...
+	global:  mean: 5.009700, stdev: 0.264145
+
+running fib.lox...
+	global:  mean: 1.288500, stdev: 0.019352
+
+running instantiation.lox...
+	global:  mean: 3.389200, stdev: 0.033895
+
+running invocation.lox...
+	global:  mean: 0.443700, stdev: 0.009673
+
+running method_call.lox...
+	global:  mean: 0.109800, stdev: 0.002936
+
+running properties.lox...
+	global:  mean: 0.709300, stdev: 0.029439
+
+running string_equality.lox...
+	global:  mean: 2.091500, stdev: 0.037301
+
+running trees.lox...
+	global:  mean: 6.336200, stdev: 0.038715
+
+running zoo.lox...
+	global:  mean: 0.505900, stdev: 0.015659
+
+running zoo_batch.lox...
+	global:  mean: 10.001100, stdev: 0.000994
+

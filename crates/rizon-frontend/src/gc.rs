@@ -1,9 +1,11 @@
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
-use std::collections::HashMap;
+// use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::any::Any;
+
+use ahash::AHashMap;
 
 use crate::object::{BoundMethod, Closure, Function, Instance, Struct, UpValue, Iterator};
 use crate::value::Value;
@@ -30,6 +32,15 @@ pub struct GcRef<T> {
      // To access marked field
     // Alternative, see note on marked field
     gc_object: NonNull<GcObject>,
+}
+
+impl<T> GcRef<T> {
+    pub fn dangling() -> Self {
+        Self {
+            pointer: NonNull::dangling(),
+            gc_object: NonNull::dangling(),
+        }
+    }
 }
 
 impl<T> GcRef<T> {
@@ -84,7 +95,7 @@ impl<T: Debug> Debug for GcRef<T> {
 pub struct Gc {
     first: Option<NonNull<GcObject>>,  // Now it's a NonNull<GcObject>
     grey_stack: Vec<NonNull<GcObject>>,
-    strings: HashMap<String, GcRef<String>>,
+    strings: AHashMap<String, GcRef<String>>,
     bytes_allocated: usize,
     next_gc: usize,
     debug: bool,
@@ -97,7 +108,7 @@ impl Gc {
         Self {
             first: None,
             grey_stack: Vec::new(),
-            strings: HashMap::new(),
+            strings: AHashMap::new(),
             bytes_allocated: 0,
             next_gc: 1024 * 1024,
             debug,
@@ -218,7 +229,7 @@ impl Gc {
         // TODO: configure a debug print
     }
 
-    pub fn mark_table(&mut self, table: &HashMap<GcRef<String>, Value>) {
+    pub fn mark_table(&mut self, table: &AHashMap<GcRef<String>, Value>) {
         for (k, v) in table {
             self.mark_object(k);
             self.mark_value(v);

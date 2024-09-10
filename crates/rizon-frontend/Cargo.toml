@@ -7,3 +7,4 @@ edition = "2021"
 # num_enum = "0.7.3"
 thiserror = { workspace = true }
 anyhow = "1.0"
+ahash = { workspace = true }
