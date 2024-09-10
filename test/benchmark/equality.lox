@@ -79,4 +79,4 @@ var elapsed = clock() - start
 // print "elapsed"
 // print elapsed
 // print "equals"
-print elapsed - loopTime
+print elapsed + loopTime

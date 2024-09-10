@@ -117,7 +117,7 @@ impl Gc {
         unsafe { pointer.as_mut().next = self.first.take() };
         self.first = Some(pointer);
 
-        unsafe { GcRef { pointer: (*pointer.as_ref()).data.cast(), gc_object: pointer } }
+        unsafe { GcRef { pointer: pointer.as_ref().data.cast(), gc_object: pointer } }
     }
 
     pub fn intern(&mut self, s: String) -> GcRef<String> {

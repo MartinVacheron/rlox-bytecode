@@ -1,0 +1,40 @@
+     --- Running benchmarks for Rizon language ---
+
+Benchmark message: bug fix in equality.lox benchamrk
+
+running arithmetic.lox...
+	global:  mean: 2.016000, stdev: 0.057079
+
+running binary_trees.lox...
+	global:  mean: 6.288700, stdev: 0.070421
+
+running equality.lox...
+	global:  mean: 8.507800, stdev: 0.181432
+
+running fib.lox...
+	global:  mean: 2.097300, stdev: 0.018827
+
+running instantiation.lox...
+	global:  mean: 3.740700, stdev: 0.031735
+
+running invocation.lox...
+	global:  mean: 0.851700, stdev: 0.007394
+
+running method_call.lox...
+	global:  mean: 0.232900, stdev: 0.006190
+
+running properties.lox...
+	global:  mean: 1.414900, stdev: 0.028097
+
+running string_equality.lox...
+	global:  mean: 5.322000, stdev: 0.132379
+
+running trees.lox...
+	global:  mean: 9.583900, stdev: 1.056367
+
+running zoo.lox...
+	global:  mean: 1.034800, stdev: 0.014935
+
+running zoo_batch.lox...
+	global:  mean: 10.003200, stdev: 0.001686
+

@@ -91,7 +91,7 @@ pub struct Struct {
 impl Struct {
     pub fn new(name: GcRef<String>) -> Self {
         Self {
-            name: name,
+            name,
             methods: HashMap::new(),
         }
     }

@@ -115,7 +115,7 @@ impl<'src> Compiler<'src> {
             }
         }
 
-        return None
+        None
     }
 
     pub fn resolve_upvalue(&mut self, name: &str) -> Option<u8> {

@@ -58,7 +58,7 @@ impl<'src> ByteCodeGen<'src> {
             return
         }
 
-        if self.compiler.scope.locals.len() > 0 {
+        if !self.compiler.scope.locals.is_empty() {
             for i in (0..=self.compiler.scope.locals.len() - 1).rev() {
                 if self.compiler.scope.locals[i].depth < self.compiler.scope.depth {
                     break
@@ -70,7 +70,7 @@ impl<'src> ByteCodeGen<'src> {
             }
         }
 
-        self.add_local(&self.previous.lexeme);
+        self.add_local(self.previous.lexeme);
     }
 
     fn identifier_constant(&mut self) -> u8 {
@@ -485,11 +485,11 @@ impl<'src> ByteCodeGen<'src> {
     }
 
     fn named_variable(&mut self, can_assign: bool) {
-        let idx = self.compiler.resolve_local(&self.previous.lexeme);
+        let idx = self.compiler.resolve_local(self.previous.lexeme);
 
         let (set_op, get_op) = match idx {
             None => {
-                match self.compiler.resolve_upvalue(&self.previous.lexeme) {
+                match self.compiler.resolve_upvalue(self.previous.lexeme) {
                     Some(upval_idx) => (Op::SetUpValue(upval_idx), Op::GetUpValue(upval_idx)),
                     None => {
                         let id = self.identifier_constant();

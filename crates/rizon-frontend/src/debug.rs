@@ -5,11 +5,11 @@ use crate::{chunk::{Chunk, Op}, object::FnUpValue, value::Value};
 
 pub struct Disassembler<'vm> {
     chunk: &'vm Chunk,
-    stack: Option<&'vm Vec<Value>>,
+    stack: Option<&'vm [Value]>,
 }
 
 impl<'vm> Disassembler<'vm> {
-    pub fn new(chunk: &'vm Chunk, stack: Option<&'vm Vec<Value>>) -> Self {
+    pub fn new(chunk: &'vm Chunk, stack: Option<&'vm [Value]>) -> Self {
         Self {
             chunk,
             stack,
@@ -134,6 +134,6 @@ fn jump_instruction(name: &str, start: usize, offset: u16) {
 
 // +1 is ok, it's because the Op::Loop is taken into account
 fn loop_instruction(name: &str, start: usize, offset: u16) {
-    println!("{:16} {} -> {}", name, start, start as i32 + 1 + offset as i32 * -1);
+    println!("{:16} {} -> {}", name, start, start as i32 + 1 - (offset as i32));
 }
 

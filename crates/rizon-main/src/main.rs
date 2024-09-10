@@ -65,6 +65,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn run_file(file_path: String, vm_flags: VmFlags) -> Result<(), Box<dyn Error>> {
     let mut vm = Vm::new(vm_flags);
+    vm.initialize();
     let code = fs::read_to_string(file_path)?;
     _ = vm.interpret(&code);
 
@@ -79,6 +80,7 @@ fn repl(vm_flags: VmFlags) -> Result<(), Box<dyn Error>> {
     println!("\n  {}", "Rizon language interpreter v0.0\n".yellow());
 
     let mut vm = Vm::new(vm_flags);
+    vm.initialize();
 
     loop {
         input.clear();
