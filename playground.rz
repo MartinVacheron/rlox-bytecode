@@ -1,12 +1,10 @@
 var start = clock()
 
-var a1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"
-var a2 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2"
-
-var i = 0
-while i < 1000000 {
-    i = i + 1
-    a1 == a2
+var result = 0
+for i in 10000000 {
+    result = result + 11
+    result = result * 10
+    result = result - (result / 100) * 99
 }
 
 print clock() - start

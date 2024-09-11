@@ -18,7 +18,7 @@ impl<'src> ByteCodeGen<'src> {
                 break;
             }
 
-            self.error_at_current(&self.current.lexeme);
+            self.error_at_current(self.current.lexeme);
         }
     }
 

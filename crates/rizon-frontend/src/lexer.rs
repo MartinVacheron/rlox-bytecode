@@ -281,7 +281,7 @@ impl<'src> Lexer<'src> {
         }
 
         self.current += 1;
-        return true;
+        true
     }
 
     fn peek(&self) -> u8 {

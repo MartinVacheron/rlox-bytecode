@@ -1,0 +1,40 @@
+     --- Running benchmarks for Rizon language ---
+
+Benchmark message: implemented unsafe GC
+
+running arithmetic.lox...
+	global:  mean: 2.014800, stdev: 0.060415
+
+running binary_trees.lox...
+	global:  mean: 5.535200, stdev: 0.145049
+
+running equality.lox...
+	global:  mean: 0.894500, stdev: 0.068074
+
+running fib.lox...
+	global:  mean: 2.140000, stdev: 0.091761
+
+running instantiation.lox...
+	global:  mean: 3.706200, stdev: 0.044763
+
+running invocation.lox...
+	global:  mean: 0.854200, stdev: 0.020741
+
+running method_call.lox...
+	global:  mean: 0.231100, stdev: 0.004999
+
+running properties.lox...
+	global:  mean: 1.384400, stdev: 0.032260
+
+running string_equality.lox...
+	global:  mean: 5.256900, stdev: 0.176881
+
+running trees.lox...
+	global:  mean: 9.575600, stdev: 0.295336
+
+running zoo.lox...
+	global:  mean: 1.025500, stdev: 0.021387
+
+running zoo_batch.lox...
+	global:  mean: 10.002500, stdev: 0.001354
+

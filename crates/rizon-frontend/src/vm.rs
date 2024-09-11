@@ -1,11 +1,15 @@
-use std::collections::HashMap;
+use std::any::Any;
+// use std::collections::HashMap;
+use ahash::AHashMap;
 use std::fmt::Debug;
+use std::ops::Deref;
+use std::ptr;
 use thiserror::Error;
 
-use crate::chunk::{Chunk, Op};
+use crate::chunk::Op;
 use crate::compiler::ByteCodeGen;
 use crate::debug::Disassembler;
-use crate::gc::{Gc, GcFormatter, GcRef, GcTrace};
+use crate::gc::{Gc, GcRef};
 use crate::object::{BoundMethod, Closure, Instance, Iterator, Struct, UpValue};
 use crate::value::{NativeFunction, Value};
 
@@ -31,19 +35,43 @@ pub enum VmErr {
 
 pub type VmRes = Result<(), VmErr>;
 
-#[derive(Debug)]
+#[derive(Clone, Copy)]
 struct CallFrame {
     closure: GcRef<Closure>,
-    ip: usize,
+    ip: *const Op,
     slots: usize,
+}
+
+impl CallFrame {
+    pub fn new(closure: GcRef<Closure>, slots: usize) -> Self {
+        Self {
+            closure,
+            ip: closure.function.chunk.code.as_ptr(),
+            slots,
+        }
+    }
+
+    pub fn offset(&self) -> usize {
+        unsafe {
+            self.ip
+                .offset_from(self.closure.function.chunk.code.as_ptr()) as usize
+        }
+    }
+
+    pub fn line(&self) -> usize {
+        self.closure.function.chunk.lines[self.offset() - 1]
+    }
 }
 
 pub struct Vm {
     flags: VmFlags,
     gc: Gc,
-    stack: Vec<Value>,
-    frames: Vec<CallFrame>,
-    globals: HashMap<GcRef<String>, Value>,
+    stack: [Value; Self::STACK_SIZE],
+    stack_top: *mut Value,
+    frames: [CallFrame; Self::FRAMES_MAX],
+    frame_count: usize,
+    // frames: Vec<CallFrame>,
+    globals: AHashMap<GcRef<String>, Value>,
     open_upvalues: Vec<GcRef<UpValue>>,
     init_string: GcRef<String>,
 }
@@ -56,18 +84,28 @@ impl Vm {
         let mut gc = Gc::new(flags.verbose_gc);
         let init_string = gc.intern("init".into());
 
-        let mut vm = Self {
+        Self {
             flags,
             gc,
-            stack: Vec::with_capacity(Self::STACK_SIZE),
-            frames: Vec::with_capacity(Self::FRAMES_MAX),
-            globals: HashMap::new(),
-            open_upvalues: vec![],
+            stack: [Value::Null; Self::STACK_SIZE],
+            stack_top: ptr::null_mut(),
+            frames: [
+                CallFrame {
+                    closure: GcRef::dangling(),
+                    ip: ptr::null(),
+                    slots: 0
+                }; Self::FRAMES_MAX
+            ],
+            frame_count: 0,
+            globals: AHashMap::new(),
+            open_upvalues: Vec::with_capacity(Self::STACK_SIZE),
             init_string,
-        };
+        }
+    }
 
-        vm.define_native("clock", clock);
-        vm
+    pub fn initialize(&mut self) {
+        self.define_native("clock", clock);
+        self.stack_top = self.stack.as_mut_ptr();
     }
 
     pub fn interpret(&mut self, code: &str) -> VmRes {
@@ -81,50 +119,58 @@ impl Vm {
         self.push(Value::Fn(function));
 
         let closure = self.alloc(Closure::from_fn(function));
-        self.frames.push(CallFrame {
-            closure,
-            ip: 0,
-            slots: 0,
-        });
+        self.frames[0] = CallFrame::new(closure, 0);
+        self.frame_count += 1;
 
         self.run()
     }
 
     fn run(&mut self) -> VmRes {
+        let mut current_frame = unsafe { &mut *self.frames.as_mut_ptr() };
+        let mut current_chunk = &current_frame.closure.function.chunk;
+
         loop {
+            let op = unsafe { *current_frame.ip };
+
             if self.flags.disassemble_instructions {
-                let disassembler = Disassembler::new(&self.gc, self.chunk(), Some(&self.stack));
+                let disassembler = Disassembler::new(current_chunk, Some(&self.stack));
 
                 if self.flags.print_stack {
-                    disassembler.print_stack();
+                    print!("          ");
+                    for i in 0..self.stack_len() {
+                        print!("[ {} ] ", self.stack[i]);
+                    }
+                    println!();
                 }
 
-                disassembler.disassemble_instruction(self.frame().ip);
+                disassembler.disassemble_instruction(current_frame.offset());
             }
 
-            let op = self.chunk().code[self.frame().ip];
-            self.frame_mut().ip += 1;
+            current_frame.ip = unsafe { current_frame.ip.add(1) };
 
             match op {
                 Op::Return => {
+                    self.frame_count -= 1;
                     let res = self.pop();
-                    let old = self.frames.pop().unwrap();
 
                     // Close all upvalues that must live longer than the function
-                    self.close_upvalue(old.slots);
+                    self.close_upvalue(current_frame.slots);
 
-                    if self.frames.is_empty() {
-                        // Fictive 'main' function
-                        // self.pop();
+                    if self.frame_count == 0 {
                         return Ok(());
                     }
 
                     // Goes back to before fn call + args
-                    self.stack.truncate(old.slots);
+                    self.stack_truncate(current_frame.slots);
                     self.push(res);
+
+                    current_frame = unsafe {
+                        &mut *(&mut self.frames[self.frame_count - 1] as *mut CallFrame)
+                    };
+                    current_chunk = &current_frame.closure.function.chunk;
                 }
                 Op::Constant(idx) => {
-                    let val = self.chunk().constants[idx as usize];
+                    let val = current_chunk.constants[idx as usize];
                     self.push(val);
                 }
                 Op::Negate => {
@@ -139,15 +185,11 @@ impl Vm {
                         (Value::Int(v1), Value::Int(v2)) => Value::Int(v1 + v2),
                         (Value::Float(v1), Value::Float(v2)) => Value::Float(v1 + v2),
                         (Value::Str(v1), Value::Str(v2)) => {
-                            let s1 = self.gc.deref(&v1);
-                            let s2 = self.gc.deref(&v2);
-                            let result = format!("{}{}", s1, s2);
+                            let result = format!("{}{}", v1.deref(), v2.deref());
                             let result = self.intern(result);
                             Value::Str(result)
                         }
                         _ => {
-                    dbg!(&lhs, &rhs);
-                    dbg!(&self.stack);
                             self.runtime_err("Operation not allowed");
                             return Err(VmErr::Runtime);
                         }
@@ -164,63 +206,59 @@ impl Vm {
                 Op::Not => {
                     if let Err(e) = self.peek_mut(0).not() {
                         self.runtime_err(&e.to_string());
-                        return Err(VmErr::Runtime)
+                        return Err(VmErr::Runtime);
                     }
                 }
                 Op::Equal => self.binop(|a, b| a.eq(b))?,
                 Op::Greater => self.binop(|a, b| a.gt(b))?,
                 Op::Less => self.binop(|a, b| a.lt(b))?,
-                Op::Print => {
-                    let value = self.pop();
-                    println!("{}", GcFormatter::new(&value, &self.gc));
-                }
+                Op::Print => println!("{}", self.pop()),
                 Op::Pop => {
-                    self.pop();
+                    _ = self.pop();
                 }
                 Op::DefineGlobal(idx) => {
-                    let name = self.chunk().read_string(idx);
+                    let name = current_chunk.read_string(idx);
                     let value = self.pop();
                     self.globals.insert(name, value);
                 }
                 Op::GetGlobal(idx) => {
-                    let name = self.chunk().read_string(idx);
+                    let name = current_chunk.read_string(idx);
 
                     match self.globals.get(&name) {
                         Some(&glob) => self.push(glob),
                         None => {
-                            let name = self.gc.deref(&name);
-                            self.runtime_err(&format!("Undefined variable '{}'", name));
+                            self.runtime_err(&format!("Undefined variable '{}'", name.deref()));
                             return Err(VmErr::Runtime);
                         }
                     }
                 }
                 Op::SetGlobal(idx) => {
-                    let name = self.chunk().read_string(idx);
+                    let name = current_chunk.read_string(idx);
 
                     if self.globals.insert(name, self.peek(0)).is_none() {
-                        self.runtime_err(&format!("Undefined variable '{}'", self.gc.deref(&name)));
+                        self.runtime_err(&format!("Undefined variable '{}'", name.deref()));
                         return Err(VmErr::Runtime);
                     }
                 }
                 Op::GetLocal(idx) => {
-                    let offset = self.frame().slots;
+                    let offset = current_frame.slots;
                     self.push(self.stack[idx as usize + offset]);
                 }
                 Op::SetLocal(idx) => {
-                    let offset = self.frame().slots;
+                    let offset = current_frame.slots;
                     self.stack[idx as usize + offset] = self.peek(0);
                 }
                 Op::JumpIfFalse(idx) => {
                     if let Value::Bool(b) = self.peek(0) {
                         if !b {
-                            self.frame_mut().ip += idx as usize;
+                            current_frame.ip = unsafe { current_frame.ip.add(idx as usize) }
                         }
                     } else if let Value::Null = self.peek(0) {
-                        self.frame_mut().ip += idx as usize;
+                        current_frame.ip = unsafe { current_frame.ip.add(idx as usize) }
                     }
                 }
-                Op::Jump(idx) => self.frame_mut().ip += idx as usize,
-                Op::Loop(idx) => self.frame_mut().ip -= idx as usize,
+                Op::Jump(idx) => current_frame.ip = unsafe { current_frame.ip.add(idx as usize) },
+                Op::Loop(idx) => current_frame.ip = unsafe { current_frame.ip.sub(idx as usize) },
                 Op::CreateIter => {
                     if let Value::Int(i) = self.pop() {
                         // The placeholder value (same as local idx)
@@ -234,11 +272,9 @@ impl Vm {
                     }
                 }
                 Op::ForIter(iter, idx) => {
-                    let iter_idx = self.frame().slots + iter as usize;
+                    let iter_idx = current_frame.slots + iter as usize;
 
-                    if let Value::Iter(iter) = &self.stack[iter_idx] {
-                        let iter = self.gc.deref_mut(iter);
-
+                    if let Value::Iter(mut iter) = &self.stack[iter_idx] {
                         match iter.range.next() {
                             Some(v) => {
                                 if let Value::Int(i) = &mut self.stack[iter_idx - 1] {
@@ -248,7 +284,9 @@ impl Vm {
                                     return Err(VmErr::Runtime);
                                 }
                             }
-                            None => self.frame_mut().ip += idx as usize,
+                            None => {
+                                current_frame.ip = unsafe { current_frame.ip.add(idx as usize) }
+                            }
                         }
                     } else {
                         panic!("failed to find iterator")
@@ -258,24 +296,29 @@ impl Vm {
                     let callee = self.peek(args_count as usize);
 
                     if let Err(e) = self.call_value(callee, args_count) {
-                        println!("{}", e.to_string());
+                        println!("{}", e);
                         return Err(VmErr::Runtime);
                     }
+
+                    current_frame = unsafe {
+                        &mut *(&mut self.frames[self.frame_count - 1] as *mut CallFrame)
+                    };
+                    current_chunk = &current_frame.closure.function.chunk;
                 }
                 Op::Closure(idx) => {
-                    let function = self.chunk().read_constant(idx);
+                    let function = current_chunk.read_constant(idx);
 
                     if let Value::Fn(function) = function {
                         let mut closure = Closure::from_fn(function);
-                        let upvalue_count = self.gc.deref(&function).upvalues.len();
+                        let upvalue_count = function.upvalues.len();
 
                         for i in 0..upvalue_count {
-                            let upvalue = self.gc.deref(&function).upvalues[i];
+                            let upvalue = function.upvalues[i];
 
                             let obj_upavlue = if upvalue.is_local {
-                                self.capture_value(self.frame().slots + upvalue.index as usize)
+                                self.capture_value(current_frame.slots + upvalue.index as usize)
                             } else {
-                                self.closure().upvalues[upvalue.index as usize]
+                                current_frame.closure.upvalues[upvalue.index as usize]
                             };
 
                             closure.upvalues.push(obj_upavlue);
@@ -288,8 +331,7 @@ impl Vm {
                     }
                 }
                 Op::GetUpValue(idx) => {
-                    let upvalue = self.closure().upvalues[idx as usize];
-                    let upvalue = self.gc.deref(&upvalue);
+                    let upvalue = current_frame.closure.upvalues[idx as usize];
 
                     let val = match upvalue.closed {
                         Some(v) => v,
@@ -300,8 +342,7 @@ impl Vm {
                 }
                 Op::SetUpValue(idx) => {
                     let value = self.peek(0);
-                    let upvalue = self.closure().upvalues[idx as usize];
-                    let upvalue = self.gc.deref_mut(&upvalue);
+                    let mut upvalue = current_frame.closure.upvalues[idx as usize];
 
                     if upvalue.closed.is_none() {
                         self.stack[upvalue.location] = value;
@@ -310,11 +351,11 @@ impl Vm {
                     }
                 }
                 Op::CloseUpValue => {
-                    self.close_upvalue(self.stack.len() - 1);
+                    self.close_upvalue(self.stack_len() - 1);
                     self.pop();
                 }
                 Op::Struct(idx) => {
-                    let name = self.chunk().read_string(idx);
+                    let name = current_chunk.read_string(idx);
                     let structure = Struct::new(name);
                     let structure = self.alloc(structure);
                     self.push(Value::Struct(structure));
@@ -322,8 +363,7 @@ impl Vm {
                 // NOTE: Field shadowing methods, do we want that?
                 Op::GetProperty(idx) => {
                     if let Value::Instance(inst) = self.peek(0) {
-                        let inst = self.gc.deref(&inst);
-                        let property_name = self.chunk().read_string(idx);
+                        let property_name = current_chunk.read_string(idx);
 
                         match inst.fields.get(&property_name) {
                             Some(&value) => {
@@ -340,11 +380,9 @@ impl Vm {
                 Op::SetProperty(idx) => {
                     //foo.bar = 4 -> stack: foo, bar, 4
                     let value = self.pop();
-                    let field_name = self.chunk().read_string(idx);
+                    let field_name = current_chunk.read_string(idx);
 
-                    if let Value::Instance(inst) = self.pop() {
-                        let inst = self.gc.deref_mut(&inst);
-
+                    if let Value::Instance(mut inst) = self.pop() {
                         inst.fields.insert(field_name, value);
                     } else {
                         self.runtime_err("only instances have field");
@@ -356,16 +394,21 @@ impl Vm {
                     self.push(value);
                 }
                 Op::Method(idx) => {
-                    let method_name = self.chunk().read_string(idx);
+                    let method_name = current_chunk.read_string(idx);
 
                     if let Err(e) = self.define_method(method_name) {
-                        println!("{}", e.to_string());
+                        println!("{}", e);
                         return Err(VmErr::Runtime);
                     }
                 }
                 Op::Invoke((name_idx, args_count)) => {
-                    let method = self.chunk().read_string(name_idx);
+                    let method = current_chunk.read_string(name_idx);
                     self.invoke(method, args_count)?;
+
+                    current_frame = unsafe {
+                        &mut *(&mut self.frames[self.frame_count - 1] as *mut CallFrame)
+                    };
+                    current_chunk = &current_frame.closure.function.chunk;
                 }
             }
         }
@@ -379,7 +422,7 @@ impl Vm {
             Some(res) => {
                 self.push(res);
                 Ok(())
-            },
+            }
             None => {
                 self.runtime_err("Operation not allowed");
                 Err(VmErr::Runtime)
@@ -391,23 +434,21 @@ impl Vm {
         match callee {
             Value::Closure(f) => self.call(f, args_count)?,
             Value::NativeFn(f) => {
-                let res = f(
-                    args_count as usize,
-                    (self.stack.len() - 1) - args_count as usize,
-                );
-                self.stack
-                    .truncate(self.stack.len() - args_count as usize - 1);
+                let left = self.stack_len() - args_count as usize;
+
+                let res = f(args_count as usize, left - 1);
+                self.stack_truncate(left - 1);
                 self.push(res);
             }
             Value::Struct(struct_ref) => {
                 let instance = Instance::new(struct_ref);
                 let instance = self.alloc(instance);
                 self.set_at(Value::Instance(instance), args_count);
-                let structure = self.gc.deref(&struct_ref);
 
                 // PERF: do not look up a hashmap?
                 // https://craftinginterpreters.com/methods-and-initializers.html#challenges
-                if let Some(&Value::Closure(initializer)) = structure.methods.get(&self.init_string)
+                if let Some(&Value::Closure(initializer)) =
+                    struct_ref.methods.get(&self.init_string)
                 {
                     self.call(initializer, args_count)?;
                 } else if args_count != 0 {
@@ -416,7 +457,6 @@ impl Vm {
                 }
             }
             Value::BoundMethod(bound) => {
-                let bound = self.gc.deref(&bound);
                 let method = bound.method;
                 let receiver = bound.receiver;
                 self.set_at(receiver, args_count);
@@ -432,10 +472,9 @@ impl Vm {
     }
 
     fn call(&mut self, closure_ref: GcRef<Closure>, args_count: u8) -> VmRes {
-        let closure = self.gc.deref(&closure_ref);
-        let function = self.gc.deref(&closure.function);
+        let function = closure_ref.function;
 
-        if self.frames.len() == Self::FRAMES_MAX {
+        if self.frame_count == Self::FRAMES_MAX {
             self.runtime_err("stack overflow");
             return Err(VmErr::Runtime);
         }
@@ -449,11 +488,12 @@ impl Vm {
             return Err(VmErr::Runtime);
         }
 
-        self.frames.push(CallFrame {
-            closure: closure_ref,
-            ip: 0,
-            slots: self.stack.len() - args_count as usize - 1, // -1 to get the fn call
-        });
+        let frame = CallFrame::new(
+            closure_ref,
+            self.stack_len() - args_count as usize - 1,
+        );
+        self.frames[self.frame_count] = frame;
+        self.frame_count += 1;
 
         Ok(())
     }
@@ -461,8 +501,7 @@ impl Vm {
     fn define_method(&mut self, name: GcRef<String>) -> VmRes {
         let method = self.pop();
 
-        if let Value::Struct(structure) = self.peek(0) {
-            let structure = self.gc.deref_mut(&structure);
+        if let Value::Struct(mut structure) = self.peek(0) {
             structure.methods.insert(name, method);
 
             Ok(())
@@ -473,7 +512,6 @@ impl Vm {
     }
 
     fn bind_method(&mut self, structure: GcRef<Struct>, name: GcRef<String>) -> Result<(), VmErr> {
-        let structure = self.gc.deref(&structure);
         if let Some(method) = structure.methods.get(&name) {
             let receiver = self.peek(0);
 
@@ -487,25 +525,20 @@ impl Vm {
             self.push(Value::BoundMethod(bound));
             Ok(())
         } else {
-            self.runtime_err(&format!(
-                "instance dosen't have field {}",
-                self.gc.deref(&name)
-            ));
+            self.runtime_err(&format!("instance dosen't have field {}", name.deref()));
             Err(VmErr::Runtime)
         }
     }
 
     fn capture_value(&mut self, index: usize) -> GcRef<UpValue> {
         // Ensure only one UpValue pointing to a slot
-        for upvalue_ref in self.open_upvalues.iter().rev() {
-            let upvalue = self.gc.deref(upvalue_ref);
-
+        for upvalue in self.open_upvalues.iter().rev() {
             if upvalue.location < index {
                 break;
             }
 
             if upvalue.location == index {
-                return *upvalue_ref;
+                return *upvalue;
             }
         }
 
@@ -517,7 +550,7 @@ impl Vm {
 
     fn invoke(&mut self, method_name: GcRef<String>, args_count: u8) -> VmRes {
         let receiver = if let Value::Instance(inst) = self.peek(args_count as usize) {
-            self.gc.deref(&inst)
+            inst
         } else {
             self.runtime_err("only instances have methods");
             return Err(VmErr::Runtime);
@@ -529,7 +562,7 @@ impl Vm {
                 self.set_at(value, args_count);
                 self.call_value(value, args_count)
             }
-            None => self.invoke_from_struct(receiver.structure, &method_name, args_count)
+            None => self.invoke_from_struct(receiver.structure, &method_name, args_count),
         }
     }
 
@@ -539,11 +572,10 @@ impl Vm {
         method_name: &GcRef<String>,
         args_count: u8,
     ) -> VmRes {
-        let structure = self.gc.deref(&structure);
         let method = if let Some(&Value::Closure(closure)) = structure.methods.get(method_name) {
             closure
         } else {
-            self.runtime_err(&format!("undefined property '{}'", self.gc.deref(method_name)));
+            self.runtime_err(&format!("undefined property '{}'", method_name.deref()));
             return Err(VmErr::Runtime);
         };
 
@@ -559,8 +591,7 @@ impl Vm {
                 break;
             }
 
-            let upvalue_ref = self.open_upvalues[i - 1];
-            let upvalue = self.gc.deref_mut(&upvalue_ref);
+            let mut upvalue = self.open_upvalues[i - 1];
 
             if upvalue.location < last {
                 break;
@@ -579,7 +610,7 @@ impl Vm {
         self.globals.insert(name, Value::NativeFn(function));
     }
 
-    fn alloc<T: GcTrace + 'static + Debug>(&mut self, object: T) -> GcRef<T> {
+    fn alloc<T: Any>(&mut self, object: T) -> GcRef<T> {
         self.mark_and_sweep();
         self.gc.alloc(object)
     }
@@ -596,7 +627,7 @@ impl Vm {
             }
 
             self.mark_roots();
-            self.gc.collect_garbage();
+            unsafe { self.gc.collect_garbage() };
 
             if self.flags.verbose_gc {
                 println!("-- GC end");
@@ -605,73 +636,77 @@ impl Vm {
     }
 
     fn mark_roots(&mut self) {
-        for &value in &self.stack {
+        for value in &self.stack[..self.stack_len()] {
             self.gc.mark_value(value);
         }
 
-        for frame in &self.frames {
-            self.gc.mark_object(frame.closure)
+        for frame in &self.frames[..self.frame_count] {
+            self.gc.mark_object(&frame.closure)
         }
 
-        for &upvalue in &self.open_upvalues {
+        for upvalue in &self.open_upvalues {
+            dbg!(&upvalue);
             self.gc.mark_object(upvalue);
         }
 
         self.gc.mark_table(&self.globals);
-        self.gc.mark_object(self.init_string);
-    }
-
-    fn pop(&mut self) -> Value {
-        self.stack.pop().unwrap()
+        self.gc.mark_object(&self.init_string);
     }
 
     fn push(&mut self, value: Value) {
-        self.stack.push(value);
+        unsafe {
+            *self.stack_top = value;
+            self.stack_top = self.stack_top.add(1)
+        }
     }
 
-    fn frame(&self) -> &CallFrame {
-        self.frames.last().unwrap()
-    }
-
-    fn frame_mut(&mut self) -> &mut CallFrame {
-        self.frames.last_mut().unwrap()
-    }
-
-    fn chunk(&self) -> &Chunk {
-        &self.gc.deref(&self.closure().function).chunk
-    }
-
-    fn closure(&self) -> &Closure {
-        self.gc.deref(&self.frame().closure)
+    fn pop(&mut self) -> Value {
+        unsafe {
+            self.stack_top = self.stack_top.sub(1);
+            *self.stack_top
+        }
     }
 
     fn peek(&self, distance: usize) -> Value {
-        self.stack[self.stack.len() - distance - 1]
+        unsafe { *self.stack_top.offset(-1 - distance as isize) }
     }
 
     fn peek_mut(&mut self, distance: usize) -> &mut Value {
-        let idx = self.stack.len() - distance - 1;
-        &mut self.stack[idx]
+        unsafe {
+            self.stack_top
+                .offset(-1 - distance as isize)
+                .as_mut()
+                .unwrap()
+        }
     }
 
     fn set_at(&mut self, value: Value, offset: u8) {
-        let index = self.stack.len() - offset as usize - 1;
-        self.stack[index] = value;
+        unsafe { *self.stack_top.offset(-1 - offset as isize) = value }
+    }
+
+    fn stack_truncate(&mut self, index: usize) {
+        unsafe { self.stack_top = self.stack.as_mut_ptr().add(index) }
+    }
+
+    fn stack_len(&self) -> usize {
+        unsafe { self.stack_top.offset_from(self.stack.as_ptr()) as usize }
     }
 
     fn runtime_err(&self, msg: &str) {
+        let frame = &self.frames[self.frame_count - 1];
+        let chunk = &frame.closure.function.chunk;
+        
         println!(
             "[line {}] Error: {}",
-            self.chunk().lines[self.chunk().code.len() - 1] + 1,
+            chunk.lines[chunk.code.len() - 1] + 1,
             msg
         );
 
-        for frame in self.frames.iter().rev() {
-            let closure = self.gc.deref(&frame.closure);
-            let function = self.gc.deref(&closure.function);
-            let name = self.gc.deref(&function.name);
+        for i in 0..self.frame_count {
+            let frame = &self.frames[i];
+            let name = frame.closure.function.name.deref();
 
-            print!("[line {}] in ", function.chunk.lines[frame.ip] + 1,);
+            print!("[line {}] in ", frame.line());
 
             if name.is_empty() {
                 println!("script");
