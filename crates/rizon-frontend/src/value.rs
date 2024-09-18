@@ -104,7 +104,7 @@ impl Display for Value {
             Float(v) => write!(f, "{}", v),
             Bool(v) => write!(f, "{}", v),
             Str(v) => write!(f, "\"{}\"", v.deref()),
-            Iter(_) => todo!(),
+            Iter(v) => write!(f, "<iter {} -> {}>", v.range.start, v.range.end),
             Fn(v) => write!(f, "<fn {}>", v.name.deref()),
             Closure(v) => write!(f, "<fn {}>", v.function.name.deref()),
             NativeFn(_) => write!(f, "<native fn>"),

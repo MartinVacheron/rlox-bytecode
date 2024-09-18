@@ -5,17 +5,27 @@
 	"version": "0.2.0",
 	"configurations": [
 		{
+			"name": "Debug Rust Binary",
 			"type": "lldb",
 			"request": "launch",
-			"name": "Debug Rust Binary",
-			"program": "${workspaceFolder}/target/debug/rizon-main.exe",
-			"args": [
-				"playground.rz"
-			],
+			"cargo": {
+				"args": [
+					"build",
+					"--features",
+					// "log_gc",
+					"stress_gc",
+				]
+			},
+			// "args": [],
 			"cwd": "${workspaceFolder}",
+			// "program": "${workspaceFolder}/target/debug/rizon-main.exe",
+			"args": [
+				"--",
+				"playground.rz",
+			],
 			"stopOnEntry": false,
-			// "preLaunchTask": "cargo build",
-			"console": "integratedTerminal"
+			"console": "integratedTerminal",
+			
 		}
 	]
 }

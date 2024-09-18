@@ -1,10 +1,16 @@
-var start = clock()
 
-var result = 0
-for i in 10000000 {
-    result = result + 11
-    result = result * 10
-    result = result - (result / 100) * 99
+fn foo() {
+    print "test gc interner..."
+
+    var s = "unique" + "string"
+    s = "other" + "thing"
+    // s = "   unique" + "string"
+    // s = "aaa" + "bbb"
+    // s = "cccc" + "dddd"
+
+    s = "aaa" + "bbb"
+
+    // print s
 }
 
-print clock() - start
+foo()

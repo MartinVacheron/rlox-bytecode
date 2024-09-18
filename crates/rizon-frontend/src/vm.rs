@@ -8,21 +8,12 @@ use thiserror::Error;
 
 use crate::chunk::Op;
 use crate::compiler::ByteCodeGen;
-use crate::debug::Disassembler;
 use crate::gc::{Gc, GcRef};
 use crate::object::{BoundMethod, Closure, Instance, Iterator, Struct, UpValue};
 use crate::value::{NativeFunction, Value};
 
 use crate::native_fn::clock;
 
-#[derive(Default)]
-pub struct VmFlags {
-    pub disassemble_compiled: bool,
-    pub disassemble_instructions: bool,
-    pub print_stack: bool,
-    pub verbose_gc: bool,
-    pub stress_gc: bool,
-}
 
 #[derive(Error, Debug)]
 pub enum VmErr {
@@ -64,13 +55,11 @@ impl CallFrame {
 }
 
 pub struct Vm {
-    flags: VmFlags,
     gc: Gc,
     stack: [Value; Self::STACK_SIZE],
     stack_top: *mut Value,
     frames: [CallFrame; Self::FRAMES_MAX],
     frame_count: usize,
-    // frames: Vec<CallFrame>,
     globals: AHashMap<GcRef<String>, Value>,
     open_upvalues: Vec<GcRef<UpValue>>,
     init_string: GcRef<String>,
@@ -80,13 +69,9 @@ impl Vm {
     const FRAMES_MAX: usize = 64;
     const STACK_SIZE: usize = Self::FRAMES_MAX * u8::MAX as usize;
 
-    pub fn new(flags: VmFlags) -> Self {
-        let mut gc = Gc::new(flags.verbose_gc);
-        let init_string = gc.intern("init".into());
-
+    pub fn new() -> Self {
         Self {
-            flags,
-            gc,
+            gc: Gc::new(),
             stack: [Value::Null; Self::STACK_SIZE],
             stack_top: ptr::null_mut(),
             frames: [
@@ -99,17 +84,20 @@ impl Vm {
             frame_count: 0,
             globals: AHashMap::new(),
             open_upvalues: Vec::with_capacity(Self::STACK_SIZE),
-            init_string,
+            init_string: GcRef::dangling(),
         }
     }
 
     pub fn initialize(&mut self) {
-        self.define_native("clock", clock);
         self.stack_top = self.stack.as_mut_ptr();
+        // NOTE: using self.gc avoid triggering the mark and sweep phase
+        self.init_string = self.gc.intern("init".into());
+
+        self.define_native("clock", clock);
     }
 
     pub fn interpret(&mut self, code: &str) -> VmRes {
-        let bytecode_gen = ByteCodeGen::new(code, &mut self.gc, self.flags.disassemble_compiled);
+        let bytecode_gen = ByteCodeGen::new(code, &mut self.gc);
 
         let function = match bytecode_gen.compile() {
             Ok(f) => f,
@@ -130,22 +118,24 @@ impl Vm {
         let mut current_chunk = &current_frame.closure.function.chunk;
 
         loop {
-            let op = unsafe { *current_frame.ip };
+            #[cfg(feature = "dis_instructions")]
+            {
+                use crate::debug::Disassembler;
 
-            if self.flags.disassemble_instructions {
                 let disassembler = Disassembler::new(current_chunk, Some(&self.stack));
-
-                if self.flags.print_stack {
-                    print!("          ");
-                    for i in 0..self.stack_len() {
-                        print!("[ {} ] ", self.stack[i]);
-                    }
-                    println!();
-                }
-
                 disassembler.disassemble_instruction(current_frame.offset());
             }
 
+            #[cfg(feature = "print_stack")]
+            {
+                print!("          ");
+                for i in 0..self.stack_len() {
+                    print!("[ {} ] ", self.stack[i]);
+                }
+                println!();
+            }
+
+            let op = unsafe { *current_frame.ip };
             current_frame.ip = unsafe { current_frame.ip.add(1) };
 
             match op {
@@ -610,7 +600,7 @@ impl Vm {
         self.globals.insert(name, Value::NativeFn(function));
     }
 
-    fn alloc<T: Any>(&mut self, object: T) -> GcRef<T> {
+    fn alloc<T: Any + Debug>(&mut self, object: T) -> GcRef<T> {
         self.mark_and_sweep();
         self.gc.alloc(object)
     }
@@ -621,17 +611,15 @@ impl Vm {
     }
 
     fn mark_and_sweep(&mut self) {
-        if self.flags.stress_gc || self.gc.should_gc() {
-            if self.flags.verbose_gc {
-                println!("-- GC begin");
-            }
+        if self.gc.should_gc() {
+            #[cfg(feature = "log_gc")]
+            println!("-- GC begin");
 
             self.mark_roots();
             unsafe { self.gc.collect_garbage() };
 
-            if self.flags.verbose_gc {
-                println!("-- GC end");
-            }
+            #[cfg(feature = "log_gc")]
+            println!("-- GC end");
         }
     }
 

@@ -1,9 +1,7 @@
-use std::ops::Deref;
-
 use anyhow::{bail, Result};
 
 use crate::{
-    chunk::{Chunk, Op}, debug::Disassembler, gc::{Gc, GcRef}, lexer::{Lexer, Token, TokenKind}, object::Function
+    chunk::{Chunk, Op}, gc::{Gc, GcRef}, lexer::{Lexer, Token, TokenKind}, object::Function
 };
 
 mod backend;
@@ -172,7 +170,6 @@ pub struct ByteCodeGen<'src> {
     previous: Token<'src>,
     had_error: bool,
     panic_mode: bool,
-    debug: bool,
     // Backend
     rules: Rules<'src>,
     compiler: Box<Compiler<'src>>,
@@ -181,7 +178,7 @@ pub struct ByteCodeGen<'src> {
 }
 
 impl<'src> ByteCodeGen<'src> {
-    pub fn new(code: &'src str, gc: &'src mut Gc, debug: bool) -> Self {
+    pub fn new(code: &'src str, gc: &'src mut Gc) -> Self {
         let name = gc.intern("script".into());
 
         Self {
@@ -190,7 +187,6 @@ impl<'src> ByteCodeGen<'src> {
             previous: Token::default(),
             had_error: false,
             panic_mode: false,
-            debug,
             rules: make_rules(),
             compiler: Compiler::new(name, FnType::Script),
             gc,
@@ -210,9 +206,8 @@ impl<'src> ByteCodeGen<'src> {
         self.expect(TokenKind::Eof, "");
         self.emit_return();
 
-        if self.debug {
-            self.dis_compiler();
-        }
+        #[cfg(feature = "dis_compile")]
+        self.dis_compiler();
 
         if self.had_error {
             bail!("Compile error")
@@ -280,9 +275,8 @@ impl<'src> ByteCodeGen<'src> {
         // We add return statement
         self.emit_return();
 
-        if self.debug {
-            self.dis_compiler();
-        }
+        #[cfg(feature = "dis_compile")]
+        self.dis_compiler();
         
         match self.compiler.enclosing.take() {
             Some(enclosing) => {
@@ -293,6 +287,7 @@ impl<'src> ByteCodeGen<'src> {
         }
     }
 
+    #[cfg(feature = "dis_compile")]
     fn dis_compiler(&self) {
         // let name = self.gc.deref(&self.compiler.function.name);
         let name = self.compiler.function.name.deref();

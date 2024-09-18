@@ -3,6 +3,14 @@ name = "rizon-frontend"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+log_gc = []
+stress_gc = []
+dis_instructions = []
+dis_compile = []
+print_stack = []
+
 [dependencies]
 # num_enum = "0.7.3"
 thiserror = { workspace = true }
