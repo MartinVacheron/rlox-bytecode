@@ -1,7 +1,8 @@
+use std::ops::Deref;
 use anyhow::{bail, Result};
 
 use crate::{
-    chunk::{Chunk, Op}, gc::{Gc, GcRef}, lexer::{Lexer, Token, TokenKind}, object::Function
+    chunk::{Chunk, Op}, debug::Disassembler, gc::{Gc, GcRef}, lexer::{Lexer, Token, TokenKind}, object::Function
 };
 
 mod backend;
@@ -289,7 +290,6 @@ impl<'src> ByteCodeGen<'src> {
 
     #[cfg(feature = "dis_compile")]
     fn dis_compiler(&self) {
-        // let name = self.gc.deref(&self.compiler.function.name);
         let name = self.compiler.function.name.deref();
         let name = if name.is_empty() {
             "<script>"

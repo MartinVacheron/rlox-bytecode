@@ -289,6 +289,7 @@ impl<'src> ByteCodeGen<'src> {
         self.add_local("__iter");
         self.mark_initialized();
         let iter_idx = self.compiler.scope.locals.len() - 1;
+        dbg!(iter_idx);
 
         let loop_start = self.start_loop();
         let exit_jump = self.emit_jump(Op::ForIter(iter_idx as u8, 0xffff));

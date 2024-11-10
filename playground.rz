@@ -1,16 +1,17 @@
+var f1
 
-fn foo() {
-    print "test gc interner..."
+for i in 4 {
+  var j = i
+  fn f() {
+    print i
+    print j
+  }
 
-    var s = "unique" + "string"
-    s = "other" + "thing"
-    // s = "   unique" + "string"
-    // s = "aaa" + "bbb"
-    // s = "cccc" + "dddd"
-
-    s = "aaa" + "bbb"
-
-    // print s
+  if j == 1 {
+      f1 = f // 1 1
+  }
 }
 
-foo()
+f1() // expect: 3
+      // expect: 1
+
